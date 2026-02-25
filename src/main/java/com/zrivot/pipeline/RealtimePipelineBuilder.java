@@ -1,0 +1,68 @@
+package com.zrivot.pipeline;
+
+import com.zrivot.config.EnricherConfig;
+import com.zrivot.config.PipelineConfig;
+import com.zrivot.enrichment.BoomerangEnrichmentFunction;
+import com.zrivot.kafka.KafkaSourceFactory;
+import com.zrivot.model.EnrichmentResult;
+import com.zrivot.model.RawDocument;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Builds the realtime enrichment sub-pipeline for a single enricher.
+ *
+ * <p>Realtime pipeline per enricher:
+ * <pre>
+ *   [Raw Kafka Topic]
+ *       → keyBy(documentId)
+ *       → BoomerangEnrichmentFunction
+ * </pre>
+ *
+ * <p>Each enricher reads from the same raw topic but uses its own consumer group,
+ * so they can lag independently without affecting each other.</p>
+ */
+public class RealtimePipelineBuilder {
+
+    private static final Logger LOG = LoggerFactory.getLogger(RealtimePipelineBuilder.class);
+
+    private final StreamExecutionEnvironment env;
+    private final PipelineConfig config;
+    private final KafkaSourceFactory kafkaSourceFactory;
+
+    public RealtimePipelineBuilder(StreamExecutionEnvironment env,
+                                   PipelineConfig config,
+                                   KafkaSourceFactory kafkaSourceFactory) {
+        this.env = env;
+        this.config = config;
+        this.kafkaSourceFactory = kafkaSourceFactory;
+    }
+
+    /**
+     * Builds the realtime enrichment pipeline for one enricher and returns
+     * the enrichment result stream.
+     */
+    public DataStream<EnrichmentResult> build(EnricherConfig enricherConfig) {
+        String enricherName = enricherConfig.getName();
+        LOG.info("Building realtime pipeline for enricher '{}'", enricherName);
+
+        // Read raw documents from Kafka with the enricher's own consumer group
+        var rawSource = kafkaSourceFactory.createRawSource(
+                config.getRawTopic(),
+                enricherConfig.getConsumerGroup()
+        );
+
+        DataStream<RawDocument> rawDocs = env
+                .fromSource(rawSource, WatermarkStrategy.noWatermarks(),
+                        "realtime-source-" + enricherName);
+
+        // KeyBy documentId and run through boomerang-guarded enrichment
+        return rawDocs
+                .keyBy(RawDocument::getDocumentId)
+                .process(new BoomerangEnrichmentFunction(enricherConfig))
+                .name("realtime-enrich-" + enricherName);
+    }
+}

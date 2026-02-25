@@ -1,0 +1,12 @@
+i want to create flink job (version 2.1 flink)
+it has few things:
+1. kafka topic input with the raw messages
+2. enrichers (with differenet configurable consumer groups), every enricher reads from the kafka topic, and then executes the enrichment (mostly will be api to enrich the data with other fields) and collect it
+3. joiner in the end - gets all the enrichments and then collects the document with all the enrichments together, and then writes it to one kafka output.
+4. reflow - another kafka topic input. for every enricher, there will be a topic with message of "What changed". all the documents will be stored in elasticsearch. the reflow (different reflow for every enricher) will read the message, turn it into elastic query, check the count of documents in this query. if there are lots of docs - split the query into slices using slicing in elastic, and then keyby the slice, and then the next processors will fetch the documents from elastic and then send it to the next processor, which it the enricher itself.
+5. there is realtime pipeline (with the raw docs in the kafka) and offline pipeline (another configuration without the kafka input, just the reflow.)
+notice that in the realtime pipeline there is also the reflow and also the kafka input.
+6. there is a field named "boomerangUpdateCount". before the enrichment executes, there will be check if the current state update count is lower or equal to the new coming, and if not - don't collect it. 
+7. make the code by SOLID principles and clean code.
+8. if one of the enrichmnets failes - i want it to NOT make the others fail.
+every reflow topic sends the data from elastic to another enricher. so if the realtime kafka enricher fails - you can lag in the kafka consumer group. and if the elastic reflow enrichment fails - you can retry by retrieve this again from the elastic and then retry the enrichment.
