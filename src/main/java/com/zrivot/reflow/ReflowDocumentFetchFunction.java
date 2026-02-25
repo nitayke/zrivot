@@ -5,11 +5,10 @@ import com.zrivot.config.ReflowConfig;
 import com.zrivot.elasticsearch.ElasticsearchService;
 import com.zrivot.model.RawDocument;
 import com.zrivot.model.ReflowSlice;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.functions.ProcessFunction;
 import org.apache.flink.util.Collector;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
@@ -23,10 +22,10 @@ import java.util.List;
  * <p>On failure, the exception is thrown (not swallowed), which causes Flink to retry.
  * This is the correct behaviour for reflow: the slice can be re-fetched from Elasticsearch.</p>
  */
+@Slf4j
 public class ReflowDocumentFetchFunction extends ProcessFunction<ReflowSlice, RawDocument> {
 
     private static final long serialVersionUID = 1L;
-    private static final Logger LOG = LoggerFactory.getLogger(ReflowDocumentFetchFunction.class);
 
     private final ElasticsearchConfig esConfig;
     private final ReflowConfig reflowConfig;
@@ -48,7 +47,7 @@ public class ReflowDocumentFetchFunction extends ProcessFunction<ReflowSlice, Ra
     public void processElement(ReflowSlice slice, Context ctx, Collector<RawDocument> out)
             throws Exception {
 
-        LOG.info("Fetching documents for {}", slice);
+        log.info("Fetching documents for {}", slice);
 
         try {
             List<RawDocument> documents = esService.fetchDocuments(slice, reflowConfig.getFetchBatchSize());
@@ -57,9 +56,9 @@ public class ReflowDocumentFetchFunction extends ProcessFunction<ReflowSlice, Ra
                 out.collect(doc);
             }
 
-            LOG.info("Emitted {} documents from {}", documents.size(), slice);
+            log.info("Emitted {} documents from {}", documents.size(), slice);
         } catch (Exception e) {
-            LOG.error("Failed to fetch documents for {}: {}", slice, e.getMessage(), e);
+            log.error("Failed to fetch documents for {}: {}", slice, e.getMessage(), e);
             // Re-throw to trigger Flink retry — the data is still in ES
             throw e;
         }

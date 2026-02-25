@@ -6,11 +6,10 @@ import com.zrivot.enrichment.BoomerangEnrichmentFunction;
 import com.zrivot.kafka.KafkaSourceFactory;
 import com.zrivot.model.EnrichmentResult;
 import com.zrivot.model.RawDocument;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Builds the realtime enrichment sub-pipeline for a single enricher.
@@ -25,9 +24,8 @@ import org.slf4j.LoggerFactory;
  * <p>Each enricher reads from the same raw topic but uses its own consumer group,
  * so they can lag independently without affecting each other.</p>
  */
+@Slf4j
 public class RealtimePipelineBuilder {
-
-    private static final Logger LOG = LoggerFactory.getLogger(RealtimePipelineBuilder.class);
 
     private final StreamExecutionEnvironment env;
     private final PipelineConfig config;
@@ -47,7 +45,7 @@ public class RealtimePipelineBuilder {
      */
     public DataStream<EnrichmentResult> build(EnricherConfig enricherConfig) {
         String enricherName = enricherConfig.getName();
-        LOG.info("Building realtime pipeline for enricher '{}'", enricherName);
+        log.info("Building realtime pipeline for enricher '{}'", enricherName);
 
         // Read raw documents from Kafka with the enricher's own consumer group
         var rawSource = kafkaSourceFactory.createRawSource(

@@ -3,14 +3,13 @@ package com.zrivot.enrichment;
 import com.zrivot.config.EnricherConfig;
 import com.zrivot.model.EnrichmentResult;
 import com.zrivot.model.RawDocument;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Flink keyed process function that guards enrichment execution with a boomerang update count check.
@@ -25,11 +24,11 @@ import org.slf4j.LoggerFactory;
  *       (one enricher failure does NOT block others).</li>
  * </ol>
  */
+@Slf4j
 public class BoomerangEnrichmentFunction
         extends KeyedProcessFunction<String, RawDocument, EnrichmentResult> {
 
     private static final long serialVersionUID = 1L;
-    private static final Logger LOG = LoggerFactory.getLogger(BoomerangEnrichmentFunction.class);
 
     private final EnricherConfig enricherConfig;
 
@@ -65,7 +64,7 @@ public class BoomerangEnrichmentFunction
         // ── Boomerang guard ──────────────────────────────────────────────
         Long currentCount = updateCountState.value();
         if (currentCount != null && incomingCount < currentCount) {
-            LOG.debug("Dropping stale event for doc={} enricher={}: incoming={} < state={}",
+            log.debug("Dropping stale event for doc={} enricher={}: incoming={} < state={}",
                     documentId, enricherConfig.getName(), incomingCount, currentCount);
             return;
         }
@@ -85,9 +84,9 @@ public class BoomerangEnrichmentFunction
                     doc.getExistingEnrichments()
             ));
 
-            LOG.debug("Enrichment success: doc={} enricher={}", documentId, enricherConfig.getName());
+            log.debug("Enrichment success: doc={} enricher={}", documentId, enricherConfig.getName());
         } catch (Exception e) {
-            LOG.error("Enrichment failed for doc={} enricher={}: {}",
+            log.error("Enrichment failed for doc={} enricher={}: {}",
                     documentId, enricherConfig.getName(), e.getMessage(), e);
 
             out.collect(EnrichmentResult.failure(

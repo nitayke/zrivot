@@ -8,10 +8,9 @@ import com.zrivot.kafka.KafkaSinkFactory;
 import com.zrivot.kafka.KafkaSourceFactory;
 import com.zrivot.model.EnrichedDocument;
 import com.zrivot.model.EnrichmentResult;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -41,9 +40,8 @@ import java.util.stream.Collectors;
  * enrichment API fails, it does NOT affect the others — the joiner will still emit
  * partial results after a configurable timeout.</p>
  */
+@Slf4j
 public class PipelineOrchestrator {
-
-    private static final Logger LOG = LoggerFactory.getLogger(PipelineOrchestrator.class);
 
     private final PipelineConfig config;
 
@@ -61,7 +59,7 @@ public class PipelineOrchestrator {
         List<EnricherConfig> enrichers = config.getEnrichers();
         PipelineMode mode = config.getMode();
 
-        LOG.info("Building pipeline in {} mode with {} enrichers", mode, enrichers.size());
+        log.info("Building pipeline in {} mode with {} enrichers", mode, enrichers.size());
 
         Set<String> enricherNames = enrichers.stream()
                 .map(EnricherConfig::getName)
@@ -97,7 +95,7 @@ public class PipelineOrchestrator {
         enrichedDocs.sinkTo(kafkaSinkFactory.createSink())
                 .name("kafka-output-sink");
 
-        LOG.info("Pipeline topology built successfully");
+        log.info("Pipeline topology built successfully");
     }
 
     /**

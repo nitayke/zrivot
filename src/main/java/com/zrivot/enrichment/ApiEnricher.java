@@ -3,8 +3,7 @@ package com.zrivot.enrichment;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zrivot.config.EnricherConfig;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -22,10 +21,10 @@ import java.util.Map;
  *   <li>{@code timeoutMs} – HTTP request timeout in milliseconds (default: 5000)</li>
  * </ul>
  */
+@Slf4j
 public class ApiEnricher implements Enricher {
 
     private static final long serialVersionUID = 1L;
-    private static final Logger LOG = LoggerFactory.getLogger(ApiEnricher.class);
 
     private String apiUrl;
     private int timeoutMs;
@@ -40,7 +39,7 @@ public class ApiEnricher implements Enricher {
                 .connectTimeout(Duration.ofMillis(timeoutMs))
                 .build();
         this.objectMapper = new ObjectMapper();
-        LOG.info("Initialised ApiEnricher '{}' → {}", config.getName(), apiUrl);
+        log.info("Initialised ApiEnricher '{}' → {}", config.getName(), apiUrl);
     }
 
     @Override
@@ -70,7 +69,7 @@ public class ApiEnricher implements Enricher {
     @Override
     public void close() {
         // HttpClient doesn't need explicit close in JDK 17
-        LOG.info("Closed ApiEnricher for {}", apiUrl);
+        log.info("Closed ApiEnricher for {}", apiUrl);
     }
 
     /**

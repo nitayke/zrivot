@@ -1,16 +1,14 @@
 package com.zrivot.enrichment;
 
 import com.zrivot.config.EnricherConfig;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Creates {@link Enricher} instances from configuration using reflection.
  * Keeps the pipeline agnostic to concrete enricher implementations.
  */
+@Slf4j
 public final class EnricherFactory {
-
-    private static final Logger LOG = LoggerFactory.getLogger(EnricherFactory.class);
 
     private EnricherFactory() {
         // utility class
@@ -32,7 +30,7 @@ public final class EnricherFactory {
             }
             Enricher enricher = (Enricher) clazz.getDeclaredConstructor().newInstance();
             enricher.init(config);
-            LOG.info("Created enricher '{}' from class {}", config.getName(), config.getClassName());
+            log.info("Created enricher '{}' from class {}", config.getName(), config.getClassName());
             return enricher;
         } catch (ReflectiveOperationException e) {
             throw new RuntimeException("Failed to create enricher: " + config.getName(), e);

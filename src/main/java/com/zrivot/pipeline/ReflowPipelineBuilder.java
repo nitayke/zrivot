@@ -9,11 +9,10 @@ import com.zrivot.model.RawDocument;
 import com.zrivot.model.ReflowSlice;
 import com.zrivot.reflow.ReflowCountAndSliceFunction;
 import com.zrivot.reflow.ReflowDocumentFetchFunction;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Builds the reflow sub-pipeline for a single enricher.
@@ -28,9 +27,8 @@ import org.slf4j.LoggerFactory;
  *       → BoomerangEnrichmentFunction
  * </pre>
  */
+@Slf4j
 public class ReflowPipelineBuilder {
-
-    private static final Logger LOG = LoggerFactory.getLogger(ReflowPipelineBuilder.class);
 
     private final StreamExecutionEnvironment env;
     private final PipelineConfig config;
@@ -49,7 +47,7 @@ public class ReflowPipelineBuilder {
      */
     public DataStream<EnrichmentResult> build(EnricherConfig enricherConfig) {
         String enricherName = enricherConfig.getName();
-        LOG.info("Building reflow pipeline for enricher '{}'", enricherName);
+        log.info("Building reflow pipeline for enricher '{}'", enricherName);
 
         // 1. Read reflow messages from the enricher's dedicated reflow Kafka topic
         var reflowSource = kafkaSourceFactory.createReflowSource(

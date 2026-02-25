@@ -5,11 +5,10 @@ import com.zrivot.config.ReflowConfig;
 import com.zrivot.elasticsearch.ElasticsearchService;
 import com.zrivot.model.ReflowMessage;
 import com.zrivot.model.ReflowSlice;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.functions.ProcessFunction;
 import org.apache.flink.util.Collector;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Converts a {@link ReflowMessage} into one or more {@link ReflowSlice}s.
@@ -23,10 +22,10 @@ import org.slf4j.LoggerFactory;
  *
  * <p>This operator opens and closes its own {@link ElasticsearchService} connection.</p>
  */
+@Slf4j
 public class ReflowCountAndSliceFunction extends ProcessFunction<ReflowMessage, ReflowSlice> {
 
     private static final long serialVersionUID = 1L;
-    private static final Logger LOG = LoggerFactory.getLogger(ReflowCountAndSliceFunction.class);
 
     private final ElasticsearchConfig esConfig;
     private final ReflowConfig reflowConfig;
@@ -57,10 +56,10 @@ public class ReflowCountAndSliceFunction extends ProcessFunction<ReflowMessage, 
 
         try {
             long count = esService.countDocuments(index, query);
-            LOG.info("Reflow count for enricher={}: {} documents", enricherName, count);
+            log.info("Reflow count for enricher={}: {} documents", enricherName, count);
 
             if (count == 0) {
-                LOG.info("No documents matched for reflow query, skipping. enricher={}", enricherName);
+                log.info("No documents matched for reflow query, skipping. enricher={}", enricherName);
                 return;
             }
 
@@ -70,7 +69,7 @@ public class ReflowCountAndSliceFunction extends ProcessFunction<ReflowMessage, 
                         reflowConfig.getMaxSlices(),
                         (int) Math.ceil((double) count / reflowConfig.getSliceThreshold())
                 );
-                LOG.info("Slicing reflow query into {} slices for enricher={}", numSlices, enricherName);
+                log.info("Slicing reflow query into {} slices for enricher={}", numSlices, enricherName);
 
                 for (int i = 0; i < numSlices; i++) {
                     out.collect(new ReflowSlice(enricherName, query, i, numSlices, index));
@@ -80,7 +79,7 @@ public class ReflowCountAndSliceFunction extends ProcessFunction<ReflowMessage, 
                 out.collect(ReflowSlice.unsliced(enricherName, query, index));
             }
         } catch (Exception e) {
-            LOG.error("Failed to count documents for reflow enricher={}: {}",
+            log.error("Failed to count documents for reflow enricher={}: {}",
                     enricherName, e.getMessage(), e);
             // Re-throw to let Flink retry (the reflow message will be re-consumed from Kafka)
             throw e;

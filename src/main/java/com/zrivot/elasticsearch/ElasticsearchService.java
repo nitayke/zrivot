@@ -17,10 +17,9 @@ import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.impl.client.BasicCredentialsProvider;
+import lombok.extern.slf4j.Slf4j;
 import org.elasticsearch.client.RestClient;
 import org.elasticsearch.client.RestClientBuilder;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -42,9 +41,8 @@ import java.util.Map;
  * <p>Instances are created per-operator and are NOT serialisable across Flink checkpoints;
  * they should be initialised inside {@code open()} methods.
  */
+@Slf4j
 public class ElasticsearchService implements Closeable {
-
-    private static final Logger LOG = LoggerFactory.getLogger(ElasticsearchService.class);
 
     private final ElasticsearchClient client;
     private final RestClient restClient;
@@ -84,7 +82,7 @@ public class ElasticsearchService implements Closeable {
 
         CountResponse response = client.count(countBuilder.build());
         long count = response.count();
-        LOG.info("Count for index={} query={}: {}", index, queryCriteria, count);
+        log.info("Count for index={} query={}: {}", index, queryCriteria, count);
         return count;
     }
 
@@ -164,7 +162,7 @@ public class ElasticsearchService implements Closeable {
             }
         }
 
-        LOG.info("Fetched {} documents for slice {}", results.size(), slice);
+        log.info("Fetched {} documents for slice {}", results.size(), slice);
         return results;
     }
 

@@ -6,12 +6,11 @@ import org.apache.flink.api.common.state.MapState;
 import org.apache.flink.api.common.state.MapStateDescriptor;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -32,11 +31,11 @@ import java.util.Set;
  * <p>For reflow documents, existing enrichments (from ES) are carried forward if an enricher
  * did not produce a new result.</p>
  */
+@Slf4j
 public class EnrichmentJoinerFunction
         extends KeyedProcessFunction<String, EnrichmentResult, EnrichedDocument> {
 
     private static final long serialVersionUID = 1L;
-    private static final Logger LOG = LoggerFactory.getLogger(EnrichmentJoinerFunction.class);
 
     private final Set<String> expectedEnricherNames;
     private final long timeoutMs;
@@ -100,7 +99,7 @@ public class EnrichmentJoinerFunction
             enrichmentState.put(result.getEnricherName(), result.getEnrichedFields());
         } else {
             enrichmentState.put(result.getEnricherName(), null);
-            LOG.warn("Enricher '{}' failed for doc={}: {}",
+            log.warn("Enricher '{}' failed for doc={}: {}",
                     result.getEnricherName(), result.getDocumentId(), result.getErrorMessage());
         }
 
@@ -121,7 +120,7 @@ public class EnrichmentJoinerFunction
     @Override
     public void onTimer(long timestamp, OnTimerContext ctx, Collector<EnrichedDocument> out)
             throws Exception {
-        LOG.warn("Joiner timeout for doc={}. Emitting partial enrichment.", ctx.getCurrentKey());
+        log.warn("Joiner timeout for doc={}. Emitting partial enrichment.", ctx.getCurrentKey());
         emitAndClear(ctx.getCurrentKey(), out);
     }
 
@@ -161,7 +160,7 @@ public class EnrichmentJoinerFunction
         );
 
         out.collect(doc);
-        LOG.debug("Emitted enriched doc={} with {} enrichments", documentId, mergedEnrichments.size());
+        log.debug("Emitted enriched doc={} with {} enrichments", documentId, mergedEnrichments.size());
 
         // Clear state
         enrichmentState.clear();
