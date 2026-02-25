@@ -2,6 +2,7 @@ package com.zrivot.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import lombok.Data;
 
 import java.io.File;
 import java.io.IOException;
@@ -15,6 +16,7 @@ import java.util.List;
  * <p>Encapsulates all settings for: pipeline mode, Kafka connectivity,
  * Elasticsearch connectivity, enricher definitions, joiner behaviour, and reflow settings.</p>
  */
+@Data
 public class PipelineConfig implements Serializable {
 
     private static final long serialVersionUID = 1L;
@@ -70,112 +72,25 @@ public class PipelineConfig implements Serializable {
         return joiner.getTimeoutMs();
     }
 
-    // ── Getters / Setters ────────────────────────────────────────────────
-
-    public PipelineSection getPipeline() {
-        return pipeline;
-    }
-
-    public void setPipeline(PipelineSection pipeline) {
-        this.pipeline = pipeline;
-    }
-
-    public KafkaSection getKafka() {
-        return kafka;
-    }
-
-    public void setKafka(KafkaSection kafka) {
-        this.kafka = kafka;
-    }
-
-    public ElasticsearchConfig getElasticsearch() {
-        return elasticsearch;
-    }
-
-    public void setElasticsearch(ElasticsearchConfig elasticsearch) {
-        this.elasticsearch = elasticsearch;
-    }
-
-    public JoinerSection getJoiner() {
-        return joiner;
-    }
-
-    public void setJoiner(JoinerSection joiner) {
-        this.joiner = joiner;
-    }
-
-    public ReflowConfig getReflow() {
-        return reflow;
-    }
-
-    public void setReflow(ReflowConfig reflow) {
-        this.reflow = reflow;
-    }
-
-    public List<EnricherConfig> getEnrichers() {
-        return enrichers;
-    }
-
-    public void setEnrichers(List<EnricherConfig> enrichers) {
-        this.enrichers = enrichers;
-    }
-
     // ── Nested section POJOs ─────────────────────────────────────────────
 
+    @Data
     public static class PipelineSection implements Serializable {
         private static final long serialVersionUID = 1L;
         private PipelineMode mode = PipelineMode.REALTIME;
-
-        public PipelineMode getMode() {
-            return mode;
-        }
-
-        public void setMode(PipelineMode mode) {
-            this.mode = mode;
-        }
     }
 
+    @Data
     public static class KafkaSection implements Serializable {
         private static final long serialVersionUID = 1L;
         private String bootstrapServers;
         private String rawTopic;
         private String outputTopic;
-
-        public String getBootstrapServers() {
-            return bootstrapServers;
-        }
-
-        public void setBootstrapServers(String bootstrapServers) {
-            this.bootstrapServers = bootstrapServers;
-        }
-
-        public String getRawTopic() {
-            return rawTopic;
-        }
-
-        public void setRawTopic(String rawTopic) {
-            this.rawTopic = rawTopic;
-        }
-
-        public String getOutputTopic() {
-            return outputTopic;
-        }
-
-        public void setOutputTopic(String outputTopic) {
-            this.outputTopic = outputTopic;
-        }
     }
 
+    @Data
     public static class JoinerSection implements Serializable {
         private static final long serialVersionUID = 1L;
         private long timeoutMs = 30_000;
-
-        public long getTimeoutMs() {
-            return timeoutMs;
-        }
-
-        public void setTimeoutMs(long timeoutMs) {
-            this.timeoutMs = timeoutMs;
-        }
     }
 }

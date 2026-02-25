@@ -1,10 +1,15 @@
 package com.zrivot.config;
 
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
 import java.io.Serializable;
 
 /**
  * Configuration for the reflow (offline re-enrichment) subsystem.
  */
+@Data
+@NoArgsConstructor
 public class ReflowConfig implements Serializable {
 
     private static final long serialVersionUID = 1L;
@@ -17,31 +22,4 @@ public class ReflowConfig implements Serializable {
 
     /** Batch size for fetching documents from Elasticsearch. */
     private int fetchBatchSize = 1000;
-
-    public ReflowConfig() {
-    }
-
-    public int getSliceThreshold() {
-        return sliceThreshold;
-    }
-
-    public void setSliceThreshold(int sliceThreshold) {
-        this.sliceThreshold = sliceThreshold;
-    }
-
-    public int getMaxSlices() {
-        return maxSlices;
-    }
-
-    public void setMaxSlices(int maxSlices) {
-        this.maxSlices = maxSlices;
-    }
-
-    public int getFetchBatchSize() {
-        return fetchBatchSize;
-    }
-
-    public void setFetchBatchSize(int fetchBatchSize) {
-        this.fetchBatchSize = fetchBatchSize;
-    }
 }
