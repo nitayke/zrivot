@@ -3,13 +3,13 @@ pipeline:
 
 kafka:
   bootstrapServers: localhost:9092
-  rawTopic: raw-documents
-  outputTopic: enriched-documents
+  rawTopic: raw-purchases
+  outputTopic: enriched-purchases
 
 elasticsearch:
   hosts:
     - http://localhost:9200
-  index: enriched-documents
+  index: purchases
   username: ""
   password: ""
   connectTimeoutMs: 5000
@@ -24,20 +24,20 @@ reflow:
   fetchBatchSize: 1000
 
 enrichers:
-  - name: geo-enricher
-    consumerGroup: geo-enricher-group
-    reflowTopic: reflow-geo
-    reflowConsumerGroup: reflow-geo-group
+  - name: purchase-geo-enricher
+    consumerGroup: purchase-geo-enricher-group
+    reflowTopic: reflow-purchase-geo
+    reflowConsumerGroup: reflow-purchase-geo-group
     className: com.zrivot.enrichment.ApiEnricher
     properties:
       apiUrl: http://geo-service:8080/enrich
       timeoutMs: "5000"
 
-  - name: user-enricher
-    consumerGroup: user-enricher-group
-    reflowTopic: reflow-user
-    reflowConsumerGroup: reflow-user-group
+  - name: purchase-fraud-enricher
+    consumerGroup: purchase-fraud-enricher-group
+    reflowTopic: reflow-purchase-fraud
+    reflowConsumerGroup: reflow-purchase-fraud-group
     className: com.zrivot.enrichment.ApiEnricher
     properties:
-      apiUrl: http://user-service:8080/enrich
+      apiUrl: http://fraud-service:8080/enrich
       timeoutMs: "5000"

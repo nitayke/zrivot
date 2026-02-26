@@ -1,0 +1,43 @@
+pipeline:
+  mode: REALTIME  # REALTIME or OFFLINE
+
+kafka:
+  bootstrapServers: localhost:9092
+  rawTopic: raw-clients
+  outputTopic: enriched-clients
+
+elasticsearch:
+  hosts:
+    - http://localhost:9200
+  index: clients
+  username: ""
+  password: ""
+  connectTimeoutMs: 5000
+  socketTimeoutMs: 30000
+
+joiner:
+  timeoutMs: 30000
+
+reflow:
+  sliceThreshold: 10000
+  maxSlices: 10
+  fetchBatchSize: 1000
+
+enrichers:
+  - name: client-geo-enricher
+    consumerGroup: client-geo-enricher-group
+    reflowTopic: reflow-client-geo
+    reflowConsumerGroup: reflow-client-geo-group
+    className: com.zrivot.enrichment.ApiEnricher
+    properties:
+      apiUrl: http://geo-service:8080/enrich
+      timeoutMs: "5000"
+
+  - name: client-identity-enricher
+    consumerGroup: client-identity-enricher-group
+    reflowTopic: reflow-client-identity
+    reflowConsumerGroup: reflow-client-identity-group
+    className: com.zrivot.enrichment.ApiEnricher
+    properties:
+      apiUrl: http://identity-service:8080/enrich
+      timeoutMs: "5000"

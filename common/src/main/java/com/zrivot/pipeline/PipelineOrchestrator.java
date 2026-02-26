@@ -20,6 +20,11 @@ import java.util.stream.Collectors;
 /**
  * Orchestrates the full enrichment pipeline based on the configured {@link PipelineMode}.
  *
+ * <p>This orchestrator is generic: it processes any document type carried inside the
+ * {@link com.zrivot.model.RawDocument#getPayload() Map payload}. The domain-specific
+ * behaviour (purchases, clients, …) is defined entirely by the YAML configuration
+ * (topics, enrichers, ES index).</p>
+ *
  * <p><strong>REALTIME mode:</strong>
  * <ul>
  *   <li>For each enricher: builds a realtime sub-pipeline (Kafka raw → enrich) AND
@@ -35,10 +40,6 @@ import java.util.stream.Collectors;
  *   <li>No Kafka raw input is created</li>
  *   <li>Everything else is the same as realtime</li>
  * </ul>
- *
- * <p>Each enricher operates independently. If one enricher's Kafka consumer lags or its
- * enrichment API fails, it does NOT affect the others — the joiner will still emit
- * partial results after a configurable timeout.</p>
  */
 @Slf4j
 public class PipelineOrchestrator {
