@@ -24,6 +24,13 @@ public class EnricherConfig implements Serializable {
     private String className;
     private Map<String, String> properties = new HashMap<>();
 
+    /**
+     * Whether this enricher participates in reflow (ES re-enrichment).
+     * When {@code false}, no reflow pipeline is built for this enricher and the
+     * boomerang update-count guard is skipped in the realtime path.
+     */
+    private boolean reflowEnabled = true;
+
     /** Timeout for Flink's AsyncDataStream per-element wait (default: 30 seconds). */
     private long asyncTimeoutMs = 30_000;
 

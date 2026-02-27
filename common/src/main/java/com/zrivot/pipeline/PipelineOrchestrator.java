@@ -69,15 +69,25 @@ public class PipelineOrchestrator {
                 .map(EnricherConfig::getName)
                 .collect(Collectors.toSet());
 
+        Set<String> reflowEnricherNames = enrichers.stream()
+                .filter(EnricherConfig::isReflowEnabled)
+                .map(EnricherConfig::getName)
+                .collect(Collectors.toSet());
+
         RealtimePipelineBuilder realtimeBuilder = new RealtimePipelineBuilder(env, config, kafkaSourceFactory);
         ReflowPipelineBuilder reflowBuilder = new ReflowPipelineBuilder(env, config, kafkaSourceFactory);
 
         List<DataStream<EnrichmentResult>> allResultStreams = new ArrayList<>();
 
         for (EnricherConfig enricherConfig : enrichers) {
-            // Build reflow pipeline (always present in both modes)
-            DataStream<EnrichmentResult> reflowResults = reflowBuilder.build(enricherConfig);
-            allResultStreams.add(reflowResults);
+            // Build reflow pipeline only for enrichers that participate in reflow
+            if (enricherConfig.isReflowEnabled()) {
+                DataStream<EnrichmentResult> reflowResults = reflowBuilder.build(enricherConfig);
+                allResultStreams.add(reflowResults);
+            } else {
+                log.info("Skipping reflow pipeline for enricher '{}' (reflowEnabled=false)",
+                        enricherConfig.getName());
+            }
 
             // Build realtime pipeline (only in REALTIME mode)
             if (mode == PipelineMode.REALTIME) {
@@ -92,7 +102,8 @@ public class PipelineOrchestrator {
         // Join all enrichments per document and emit
         DataStream<EnrichedDocument> enrichedDocs = unifiedResults
                 .keyBy(EnrichmentResult::getDocumentId)
-                .process(new EnrichmentJoinerFunction(enricherNames, config.getJoinerTimeoutMs()))
+                .process(new EnrichmentJoinerFunction(
+                        enricherNames, reflowEnricherNames, config.getJoinerTimeoutMs()))
                 .name("enrichment-joiner");
 
         // Write to Kafka output

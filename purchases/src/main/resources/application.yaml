@@ -26,6 +26,7 @@ zrivot:
   enrichers:
     - name: purchase-geo-enricher
       consumer-group: purchase-geo-enricher-group
+      reflow-enabled: true
       reflow-topic: reflow-purchase-geo
       reflow-consumer-group: reflow-purchase-geo-group
       class-name: com.zrivot.enrichment.ApiEnricher
@@ -34,8 +35,7 @@ zrivot:
         timeoutMs: "5000"
     - name: purchase-fraud-enricher
       consumer-group: purchase-fraud-enricher-group
-      reflow-topic: reflow-purchase-fraud
-      reflow-consumer-group: reflow-purchase-fraud-group
+      reflow-enabled: false
       class-name: com.zrivot.enrichment.ApiEnricher
       properties:
         apiUrl: http://fraud-service:8080/enrich

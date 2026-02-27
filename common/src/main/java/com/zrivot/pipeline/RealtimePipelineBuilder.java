@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit;
  * <pre>
  *   [Raw Kafka Topic]
  *       → keyBy(documentId)
- *       → BoomerangEnrichmentFunction  (keyed state guard — filters stale events)
+ *       → BoomerangEnrichmentFunction  (keyed state guard — only when reflowEnabled)
  *       → AsyncDataStream              (non-blocking API enrichment)
  * </pre>
  *
@@ -62,15 +62,22 @@ public class RealtimePipelineBuilder {
                 .fromSource(rawSource, WatermarkStrategy.noWatermarks(),
                         "realtime-source-" + enricherName);
 
-        // 1. KeyBy documentId → boomerang guard (uses keyed state to filter stale events)
-        DataStream<RawDocument> guardedDocs = rawDocs
-                .keyBy(RawDocument::getDocumentId)
-                .process(new BoomerangEnrichmentFunction(enricherConfig))
-                .name("realtime-guard-" + enricherName);
+        // Determine input stream for async enrichment:
+        // - With reflow: apply boomerang guard (keyed state filters stale events)
+        // - Without reflow: no guard needed — pass raw docs straight through
+        DataStream<RawDocument> enricherInput;
+        if (enricherConfig.isReflowEnabled()) {
+            enricherInput = rawDocs
+                    .keyBy(RawDocument::getDocumentId)
+                    .process(new BoomerangEnrichmentFunction(enricherConfig))
+                    .name("realtime-guard-" + enricherName);
+        } else {
+            enricherInput = rawDocs;
+        }
 
-        // 2. Async enrichment — non-blocking API calls via AsyncDataStream
+        // Async enrichment — non-blocking API calls via AsyncDataStream
         return AsyncDataStream.unorderedWait(
-                guardedDocs,
+                enricherInput,
                 new AsyncEnrichmentFunction(enricherConfig),
                 enricherConfig.getAsyncTimeoutMs(),
                 TimeUnit.MILLISECONDS,

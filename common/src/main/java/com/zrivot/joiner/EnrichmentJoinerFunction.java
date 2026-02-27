@@ -28,6 +28,10 @@ import java.util.Set;
  *       configured window, the document is emitted with whatever enrichments have arrived.</li>
  * </ol>
  *
+ * <p>For reflow documents, only enrichers with {@code reflowEnabled=true} are expected.
+ * For realtime documents, all enrichers are expected.  This distinction avoids the joiner
+ * waiting for enrichers that will never produce a result for the given doc.</p>
+ *
  * <p>For reflow documents, existing enrichments (from ES) are carried forward if an enricher
  * did not produce a new result.</p>
  */
@@ -35,9 +39,12 @@ import java.util.Set;
 public class EnrichmentJoinerFunction
         extends KeyedProcessFunction<String, EnrichmentResult, EnrichedDocument> {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 2L;
 
-    private final Set<String> expectedEnricherNames;
+    /** All enricher names — used for realtime documents. */
+    private final Set<String> allEnricherNames;
+    /** Only reflow-enabled enricher names — used for reflow documents. */
+    private final Set<String> reflowEnricherNames;
     private final long timeoutMs;
 
     /**
@@ -55,8 +62,14 @@ public class EnrichmentJoinerFunction
     /** Whether a timer has already been set for this key. */
     private transient ValueState<Boolean> timerSetState;
 
-    public EnrichmentJoinerFunction(Set<String> expectedEnricherNames, long timeoutMs) {
-        this.expectedEnricherNames = expectedEnricherNames;
+    /** Tracks whether the current document batch is a reflow (determines expected enricher set). */
+    private transient ValueState<Boolean> isReflowState;
+
+    public EnrichmentJoinerFunction(Set<String> allEnricherNames,
+                                    Set<String> reflowEnricherNames,
+                                    long timeoutMs) {
+        this.allEnricherNames = allEnricherNames;
+        this.reflowEnricherNames = reflowEnricherNames;
         this.timeoutMs = timeoutMs;
     }
 
@@ -77,6 +90,9 @@ public class EnrichmentJoinerFunction
         timerSetState = getRuntimeContext().getState(
                 new ValueStateDescriptor<>("timerSet", Types.BOOLEAN)
         );
+        isReflowState = getRuntimeContext().getState(
+                new ValueStateDescriptor<>("isReflow", Types.BOOLEAN)
+        );
     }
 
     @Override
@@ -86,6 +102,11 @@ public class EnrichmentJoinerFunction
         // Store original payload from the first result
         if (originalPayloadState.value() == null) {
             originalPayloadState.update(result.getOriginalPayload());
+        }
+
+        // Track whether this document batch is a reflow (first result determines)
+        if (isReflowState.value() == null) {
+            isReflowState.update(result.isReflow());
         }
 
         // Store existing enrichments for reflow documents
@@ -125,7 +146,11 @@ public class EnrichmentJoinerFunction
     }
 
     private boolean allEnrichersReported() throws Exception {
-        for (String name : expectedEnricherNames) {
+        Set<String> expected = Boolean.TRUE.equals(isReflowState.value())
+                ? reflowEnricherNames
+                : allEnricherNames;
+
+        for (String name : expected) {
             if (!enrichmentState.contains(name)) {
                 return false;
             }
@@ -167,5 +192,6 @@ public class EnrichmentJoinerFunction
         originalPayloadState.clear();
         existingEnrichmentsState.clear();
         timerSetState.clear();
+        isReflowState.clear();
     }
 }
