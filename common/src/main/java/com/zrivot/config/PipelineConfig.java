@@ -3,6 +3,7 @@ package com.zrivot.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import lombok.Data;
+import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.io.File;
 import java.io.IOException;
@@ -11,12 +12,15 @@ import java.io.Serializable;
 import java.util.List;
 
 /**
- * Top-level pipeline configuration. Loaded from a YAML file at job startup.
+ * Top-level pipeline configuration.
  *
- * <p>Encapsulates all settings for: pipeline mode, Kafka connectivity,
- * Elasticsearch connectivity, enricher definitions, joiner behaviour, and reflow settings.</p>
+ * <p>When running inside a Spring Boot application the properties are bound automatically
+ * from {@code application.yaml} under the {@code zrivot.*} prefix.  The static
+ * {@link #load(String)} and {@link #loadFromClasspath(String)} helpers are kept for
+ * standalone / test usage outside the Spring context.</p>
  */
 @Data
+@ConfigurationProperties(prefix = "zrivot")
 public class PipelineConfig implements Serializable {
 
     private static final long serialVersionUID = 1L;

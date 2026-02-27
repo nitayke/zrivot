@@ -1,0 +1,42 @@
+spring:
+  main:
+    web-application-type: none
+
+zrivot:
+  pipeline:
+    mode: REALTIME  # REALTIME or OFFLINE
+  kafka:
+    bootstrap-servers: localhost:9092
+    raw-topic: raw-purchases
+    output-topic: enriched-purchases
+  elasticsearch:
+    hosts:
+      - http://localhost:9200
+    index: purchases
+    username: ""
+    password: ""
+    connect-timeout-ms: 5000
+    socket-timeout-ms: 30000
+  joiner:
+    timeout-ms: 30000
+  reflow:
+    slice-threshold: 10000
+    max-slices: 10
+    fetch-batch-size: 1000
+  enrichers:
+    - name: purchase-geo-enricher
+      consumer-group: purchase-geo-enricher-group
+      reflow-topic: reflow-purchase-geo
+      reflow-consumer-group: reflow-purchase-geo-group
+      class-name: com.zrivot.enrichment.ApiEnricher
+      properties:
+        apiUrl: http://geo-service:8080/enrich
+        timeoutMs: "5000"
+    - name: purchase-fraud-enricher
+      consumer-group: purchase-fraud-enricher-group
+      reflow-topic: reflow-purchase-fraud
+      reflow-consumer-group: reflow-purchase-fraud-group
+      class-name: com.zrivot.enrichment.ApiEnricher
+      properties:
+        apiUrl: http://fraud-service:8080/enrich
+        timeoutMs: "5000"

@@ -5,53 +5,42 @@ import com.zrivot.pipeline.PipelineOrchestrator;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.CommandLineRunner;
 
 /**
- * Abstract base for domain-specific Flink jobs.
+ * Abstract base for domain-specific Flink jobs, wired via Spring Boot.
  *
- * <p>Subclasses only need to provide the default config resource name and
- * the Flink job display name. The pipeline is fully generic and is driven
- * by the YAML configuration.</p>
+ * <p>Subclasses are {@code @SpringBootApplication} entry points that only need to
+ * provide the Flink job display name.  Configuration is loaded automatically by
+ * Spring Boot from {@code application.yaml} and injected via
+ * {@link com.zrivot.config.ZrivotPipelineAutoConfiguration}.</p>
  *
  * <p>Usage in a sub-project:
  * <pre>
+ *   {@literal @}SpringBootApplication(scanBasePackages = "com.zrivot")
  *   public class PurchasesJob extends ZrivotJobBase {
- *       protected String getDefaultConfigResource() { return "pipeline-config.yaml"; }
  *       protected String getJobName(PipelineConfig c) { return "Purchases [" + c.getMode() + "]"; }
- *       public static void main(String[] args) throws Exception { new PurchasesJob().run(args); }
+ *       public static void main(String[] args) { SpringApplication.run(PurchasesJob.class, args); }
  *   }
  * </pre>
  */
 @Slf4j
-public abstract class ZrivotJobBase {
+public abstract class ZrivotJobBase implements CommandLineRunner {
 
-    /**
-     * Classpath resource loaded when no command-line config path is supplied.
-     */
-    protected abstract String getDefaultConfigResource();
+    @Autowired
+    private PipelineConfig config;
+
+    @Autowired
+    private PipelineOrchestrator orchestrator;
 
     /**
      * Display name shown in the Flink dashboard.
      */
     protected abstract String getJobName(PipelineConfig config);
 
-    /**
-     * Runs the enrichment pipeline end-to-end.
-     *
-     * @param args optional single argument: path to a YAML config file
-     */
-    public void run(String[] args) throws Exception {
-        // ── Load configuration ───────────────────────────────────────────
-        PipelineConfig config;
-        if (args.length > 0) {
-            log.info("Loading configuration from file: {}", args[0]);
-            config = PipelineConfig.load(args[0]);
-        } else {
-            String resource = getDefaultConfigResource();
-            log.info("Loading configuration from classpath: {}", resource);
-            config = PipelineConfig.loadFromClasspath(resource);
-        }
-
+    @Override
+    public void run(String... args) throws Exception {
         log.info("Pipeline mode: {}", config.getMode());
         log.info("Enrichers configured: {}", config.getEnrichers().size());
 
@@ -61,7 +50,6 @@ public abstract class ZrivotJobBase {
         env.enableCheckpointing(60_000);
 
         // ── Build and execute pipeline ───────────────────────────────────
-        PipelineOrchestrator orchestrator = new PipelineOrchestrator(config);
         orchestrator.build(env);
 
         env.execute(getJobName(config));

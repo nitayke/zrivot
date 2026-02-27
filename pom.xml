@@ -34,10 +34,20 @@
         <log4j.version>2.23.0</log4j.version>
         <lombok.version>1.18.30</lombok.version>
         <junit.version>5.10.2</junit.version>
+        <spring-boot.version>3.2.5</spring-boot.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <!-- Spring Boot BOM -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
             <!-- Internal modules -->
             <dependency>
                 <groupId>com.zrivot</groupId>
@@ -120,6 +130,25 @@
                 <artifactId>log4j-core</artifactId>
                 <version>${log4j.version}</version>
                 <scope>runtime</scope>
+            </dependency>
+
+            <!-- Spring Boot (exclude logback – Flink uses log4j2) -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-starter</artifactId>
+                <version>${spring-boot.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.springframework.boot</groupId>
+                        <artifactId>spring-boot-starter-logging</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-configuration-processor</artifactId>
+                <version>${spring-boot.version}</version>
+                <optional>true</optional>
             </dependency>
 
             <!-- Test -->

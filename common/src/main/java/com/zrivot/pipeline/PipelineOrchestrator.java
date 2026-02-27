@@ -45,18 +45,21 @@ import java.util.stream.Collectors;
 public class PipelineOrchestrator {
 
     private final PipelineConfig config;
+    private final KafkaSourceFactory kafkaSourceFactory;
+    private final KafkaSinkFactory kafkaSinkFactory;
 
-    public PipelineOrchestrator(PipelineConfig config) {
+    public PipelineOrchestrator(PipelineConfig config,
+                                KafkaSourceFactory kafkaSourceFactory,
+                                KafkaSinkFactory kafkaSinkFactory) {
         this.config = config;
+        this.kafkaSourceFactory = kafkaSourceFactory;
+        this.kafkaSinkFactory = kafkaSinkFactory;
     }
 
     /**
      * Builds and wires the complete pipeline topology in the given Flink environment.
      */
     public void build(StreamExecutionEnvironment env) {
-        KafkaSourceFactory kafkaSourceFactory = new KafkaSourceFactory(config);
-        KafkaSinkFactory kafkaSinkFactory = new KafkaSinkFactory(config);
-
         List<EnricherConfig> enrichers = config.getEnrichers();
         PipelineMode mode = config.getMode();
 
