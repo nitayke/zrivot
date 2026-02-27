@@ -4,6 +4,7 @@ import com.zrivot.config.PipelineConfig;
 import com.zrivot.model.RawDocument;
 import com.zrivot.model.ReflowMessage;
 import com.zrivot.serde.JsonDeserializationSchema;
+import com.zrivot.serde.RawDocumentDeserializationSchema;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 
@@ -25,14 +26,21 @@ public class KafkaSourceFactory implements Serializable {
 
     /**
      * Creates a Kafka source for raw documents with the given consumer group.
+     *
+     * @param topic         the Kafka topic to consume from
+     * @param consumerGroup the consumer group id
+     * @param documentClass the domain document class for typed payload deserialization
+     * @param <T>           the domain document type
      */
-    public KafkaSource<RawDocument> createRawSource(String topic, String consumerGroup) {
-        return KafkaSource.<RawDocument>builder()
+    @SuppressWarnings("unchecked")
+    public <T> KafkaSource<RawDocument<T>> createRawSource(String topic, String consumerGroup,
+                                                           Class<T> documentClass) {
+        return (KafkaSource<RawDocument<T>>) (KafkaSource<?>) KafkaSource.builder()
                 .setBootstrapServers(bootstrapServers)
                 .setTopics(topic)
                 .setGroupId(consumerGroup)
                 .setStartingOffsets(OffsetsInitializer.committedOffsets())
-                .setValueOnlyDeserializer(new JsonDeserializationSchema<>(RawDocument.class))
+                .setValueOnlyDeserializer(new RawDocumentDeserializationSchema<>(documentClass))
                 .build();
     }
 

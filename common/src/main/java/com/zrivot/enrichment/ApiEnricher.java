@@ -48,7 +48,7 @@ public class ApiEnricher implements Enricher {
     }
 
     @Override
-    public Map<String, Object> enrich(String documentId, Map<String, Object> payload) throws Exception {
+    public Map<String, Object> enrich(String documentId, Object payload) throws Exception {
         ensureInitialised();
 
         HttpRequest request = buildRequest(documentId, payload);
@@ -63,7 +63,7 @@ public class ApiEnricher implements Enricher {
      */
     @Override
     public CompletableFuture<Map<String, Object>> enrichAsync(String documentId,
-                                                               Map<String, Object> payload) {
+                                                               Object payload) {
         ensureInitialised();
 
         HttpRequest request;
@@ -85,7 +85,7 @@ public class ApiEnricher implements Enricher {
 
     // ──────────────────────── internals ──────────────────────────────────
 
-    private HttpRequest buildRequest(String documentId, Map<String, Object> payload) {
+    private HttpRequest buildRequest(String documentId, Object payload) {
         ensureInitialised();
         try {
             byte[] requestBody = objectMapper.writeValueAsBytes(payload);

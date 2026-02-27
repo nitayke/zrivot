@@ -27,9 +27,9 @@ import java.util.concurrent.CompletableFuture;
  * enricher failure does NOT block the joiner or other enrichers.</p>
  */
 @Slf4j
-public class AsyncEnrichmentFunction extends RichAsyncFunction<RawDocument, EnrichmentResult> {
+public class AsyncEnrichmentFunction extends RichAsyncFunction<RawDocument<?>, EnrichmentResult> {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 2L;
 
     private final EnricherConfig enricherConfig;
 
@@ -46,7 +46,7 @@ public class AsyncEnrichmentFunction extends RichAsyncFunction<RawDocument, Enri
     }
 
     @Override
-    public void asyncInvoke(RawDocument doc, ResultFuture<EnrichmentResult> resultFuture) {
+    public void asyncInvoke(RawDocument<?> doc, ResultFuture<EnrichmentResult> resultFuture) {
 
         String documentId = doc.getDocumentId();
         long updateCount = doc.getBoomerangUpdateCount();
@@ -95,7 +95,7 @@ public class AsyncEnrichmentFunction extends RichAsyncFunction<RawDocument, Enri
      * {@code AsyncDataStream}).  Emits a failure result rather than crashing the pipeline.
      */
     @Override
-    public void timeout(RawDocument doc, ResultFuture<EnrichmentResult> resultFuture) {
+    public void timeout(RawDocument<?> doc, ResultFuture<EnrichmentResult> resultFuture) {
 
         String documentId = doc.getDocumentId();
         log.warn("Async enrichment timed out for doc={} enricher={}",

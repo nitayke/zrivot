@@ -26,9 +26,9 @@ import org.apache.flink.util.Collector;
  */
 @Slf4j
 public class BoomerangEnrichmentFunction
-        extends KeyedProcessFunction<String, RawDocument, RawDocument> {
+        extends KeyedProcessFunction<String, RawDocument<?>, RawDocument<?>> {
 
-    private static final long serialVersionUID = 2L;
+    private static final long serialVersionUID = 3L;
 
     private final EnricherConfig enricherConfig;
 
@@ -50,7 +50,7 @@ public class BoomerangEnrichmentFunction
     }
 
     @Override
-    public void processElement(RawDocument doc, Context ctx, Collector<RawDocument> out)
+    public void processElement(RawDocument<?> doc, Context ctx, Collector<RawDocument<?>> out)
             throws Exception {
 
         String documentId = doc.getDocumentId();

@@ -99,14 +99,17 @@ public class ElasticsearchService implements Closeable {
      * cursor must be persisted to Flink state before moving to the next batch.  An asynchronous
      * fetch would make it impossible to guarantee the cursor is checkpointed between batches.</p>
      *
-     * @param slice       the slice to query
-     * @param batchSize   max documents per batch
-     * @param searchAfter the cursor from the previous batch, or {@code null} for the first page
+     * @param slice         the slice to query
+     * @param batchSize     max documents per batch
+     * @param searchAfter   the cursor from the previous batch, or {@code null} for the first page
+     * @param documentClass the domain document class for typed deserialization
+     * @param <T>           the domain document type
      * @return batch result containing documents and the cursor for the next page (null if done)
      */
     @SuppressWarnings("unchecked")
-    public FetchBatchResult fetchBatch(ReflowSlice slice, int batchSize,
-                                       List<String> searchAfter) throws IOException {
+    public <T> FetchBatchResult<T> fetchBatch(ReflowSlice slice, int batchSize,
+                                              List<String> searchAfter,
+                                              Class<T> documentClass) throws IOException {
 
         SearchRequest.Builder searchBuilder = new SearchRequest.Builder()
                 .index(slice.getIndex())
@@ -133,16 +136,18 @@ public class ElasticsearchService implements Closeable {
                     .toList());
         }
 
+        // Read as Map to extract pipeline metadata, then convert payload to typed object
         SearchResponse<Map> response = client.search(searchBuilder.build(), Map.class);
         List<Hit<Map>> hits = response.hits().hits();
 
-        List<RawDocument> documents = new ArrayList<>();
+        List<RawDocument<T>> documents = new ArrayList<>();
         for (Hit<Map> hit : hits) {
             Map<String, Object> source = hit.source();
             if (source != null) {
-                documents.add(RawDocument.builder()
+                T typedPayload = objectMapper.convertValue(source, documentClass);
+                documents.add(RawDocument.<T>builder()
                         .documentId(hit.id())
-                        .payload(source)
+                        .payload(typedPayload)
                         .boomerangUpdateCount(extractUpdateCount(source))
                         .reflow(true)
                         .existingEnrichments(extractEnrichments(source))
@@ -161,7 +166,7 @@ public class ElasticsearchService implements Closeable {
             }
         }
 
-        return new FetchBatchResult(documents, nextSearchAfter);
+        return new FetchBatchResult<>(documents, nextSearchAfter);
     }
 
     /**
@@ -169,12 +174,13 @@ public class ElasticsearchService implements Closeable {
      * calling {@link #fetchBatch}.  Useful for tests or non-Flink callers that do not need
      * checkpoint recovery.
      */
-    public List<RawDocument> fetchDocuments(ReflowSlice slice, int batchSize) throws IOException {
-        List<RawDocument> results = new ArrayList<>();
+    public <T> List<RawDocument<T>> fetchDocuments(ReflowSlice slice, int batchSize,
+                                                   Class<T> documentClass) throws IOException {
+        List<RawDocument<T>> results = new ArrayList<>();
         List<String> searchAfter = null;
 
         while (true) {
-            FetchBatchResult batch = fetchBatch(slice, batchSize, searchAfter);
+            FetchBatchResult<T> batch = fetchBatch(slice, batchSize, searchAfter, documentClass);
             results.addAll(batch.getDocuments());
 
             if (!batch.hasMore()) {

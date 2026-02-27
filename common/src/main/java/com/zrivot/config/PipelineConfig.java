@@ -33,6 +33,13 @@ public class PipelineConfig implements Serializable {
     private ReflowConfig reflow = new ReflowConfig();
     private List<EnricherConfig> enrichers;
 
+    /**
+     * Fully-qualified class name of the domain document type
+     * (e.g. {@code com.zrivot.purchases.model.PurchaseDocument}).
+     * Used for typed deserialization of Kafka messages and Elasticsearch documents.
+     */
+    private String documentClassName;
+
     // ── Loading ──────────────────────────────────────────────────────────
 
     /**
@@ -74,6 +81,25 @@ public class PipelineConfig implements Serializable {
 
     public long getJoinerTimeoutMs() {
         return joiner.getTimeoutMs();
+    }
+
+    /**
+     * Resolves the configured document class at runtime.
+     *
+     * @param <T> the domain document type
+     * @return the {@code Class<T>} for the configured document type
+     * @throws IllegalStateException if the class is not configured or cannot be found
+     */
+    @SuppressWarnings("unchecked")
+    public <T> Class<T> getDocumentClass() {
+        if (documentClassName == null || documentClassName.isBlank()) {
+            throw new IllegalStateException("documentClassName is not configured in pipeline config");
+        }
+        try {
+            return (Class<T>) Class.forName(documentClassName);
+        } catch (ClassNotFoundException e) {
+            throw new IllegalStateException("Document class not found: " + documentClassName, e);
+        }
     }
 
     // ── Nested section POJOs ─────────────────────────────────────────────

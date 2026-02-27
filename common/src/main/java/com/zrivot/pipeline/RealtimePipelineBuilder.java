@@ -35,13 +35,16 @@ public class RealtimePipelineBuilder {
     private final StreamExecutionEnvironment env;
     private final PipelineConfig config;
     private final KafkaSourceFactory kafkaSourceFactory;
+    private final Class<?> documentClass;
 
     public RealtimePipelineBuilder(StreamExecutionEnvironment env,
                                    PipelineConfig config,
-                                   KafkaSourceFactory kafkaSourceFactory) {
+                                   KafkaSourceFactory kafkaSourceFactory,
+                                   Class<?> documentClass) {
         this.env = env;
         this.config = config;
         this.kafkaSourceFactory = kafkaSourceFactory;
+        this.documentClass = documentClass;
     }
 
     /**
@@ -55,17 +58,18 @@ public class RealtimePipelineBuilder {
         // Read raw documents from Kafka with the enricher's own consumer group
         var rawSource = kafkaSourceFactory.createRawSource(
                 config.getRawTopic(),
-                enricherConfig.getConsumerGroup()
+                enricherConfig.getConsumerGroup(),
+                documentClass
         );
 
-        DataStream<RawDocument> rawDocs = env
+        DataStream<RawDocument<?>> rawDocs = env
                 .fromSource(rawSource, WatermarkStrategy.noWatermarks(),
                         "realtime-source-" + enricherName);
 
         // Determine input stream for async enrichment:
         // - With reflow: apply boomerang guard (keyed state filters stale events)
         // - Without reflow: no guard needed — pass raw docs straight through
-        DataStream<RawDocument> enricherInput;
+        DataStream<RawDocument<?>> enricherInput;
         if (enricherConfig.isReflowEnabled()) {
             enricherInput = rawDocs
                     .keyBy(RawDocument::getDocumentId)

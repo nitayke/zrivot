@@ -47,13 +47,14 @@ import java.util.List;
  * each unique slice has its own isolated state partition.</p>
  */
 @Slf4j
-public class ReflowDocumentFetchFunction
-        extends KeyedProcessFunction<String, ReflowSlice, RawDocument> {
+public class ReflowDocumentFetchFunction<T>
+        extends KeyedProcessFunction<String, ReflowSlice, RawDocument<T>> {
 
-    private static final long serialVersionUID = 2L;
+    private static final long serialVersionUID = 3L;
 
     private final ElasticsearchConfig esConfig;
     private final ReflowConfig reflowConfig;
+    private final Class<T> documentClass;
 
     private transient ElasticsearchService esService;
 
@@ -65,9 +66,11 @@ public class ReflowDocumentFetchFunction
     /** Running total of documents emitted so far (for logging). */
     private transient ValueState<Long> fetchedCountState;
 
-    public ReflowDocumentFetchFunction(ElasticsearchConfig esConfig, ReflowConfig reflowConfig) {
+    public ReflowDocumentFetchFunction(ElasticsearchConfig esConfig, ReflowConfig reflowConfig,
+                                        Class<T> documentClass) {
         this.esConfig = esConfig;
         this.reflowConfig = reflowConfig;
+        this.documentClass = documentClass;
     }
 
     @Override
@@ -90,7 +93,7 @@ public class ReflowDocumentFetchFunction
      * the first batch fetch.
      */
     @Override
-    public void processElement(ReflowSlice slice, Context ctx, Collector<RawDocument> out)
+    public void processElement(ReflowSlice slice, Context ctx, Collector<RawDocument<T>> out)
             throws Exception {
 
         log.info("Starting stateful fetch for {}", slice);
@@ -109,7 +112,7 @@ public class ReflowDocumentFetchFunction
      * If Flink recovered from a checkpoint, this is where fetching resumes automatically.
      */
     @Override
-    public void onTimer(long timestamp, OnTimerContext ctx, Collector<RawDocument> out)
+    public void onTimer(long timestamp, OnTimerContext ctx, Collector<RawDocument<T>> out)
             throws Exception {
 
         ReflowSlice slice = sliceState.value();
@@ -122,7 +125,7 @@ public class ReflowDocumentFetchFunction
 
     // ------------------------------ internal ---------------------------------
 
-    private void fetchNextBatch(Collector<RawDocument> out, TimerService timerService)
+    private void fetchNextBatch(Collector<RawDocument<T>> out, TimerService timerService)
             throws Exception {
 
         ReflowSlice slice = sliceState.value();
@@ -134,11 +137,11 @@ public class ReflowDocumentFetchFunction
         List<String> cursor = readSearchAfterCursor();
 
         // Synchronous ES fetch — one batch at a time for checkpoint safety
-        FetchBatchResult result = esService.fetchBatch(
-                slice, reflowConfig.getFetchBatchSize(), cursor);
+        FetchBatchResult<T> result = esService.fetchBatch(
+                slice, reflowConfig.getFetchBatchSize(), cursor, documentClass);
 
         // Emit documents downstream
-        for (RawDocument doc : result.getDocuments()) {
+        for (RawDocument<T> doc : result.getDocuments()) {
             out.collect(doc);
         }
 

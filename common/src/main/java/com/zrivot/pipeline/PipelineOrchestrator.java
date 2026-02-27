@@ -62,8 +62,10 @@ public class PipelineOrchestrator {
     public void build(StreamExecutionEnvironment env) {
         List<EnricherConfig> enrichers = config.getEnrichers();
         PipelineMode mode = config.getMode();
+        Class<?> documentClass = config.getDocumentClass();
 
-        log.info("Building pipeline in {} mode with {} enrichers", mode, enrichers.size());
+        log.info("Building pipeline in {} mode with {} enrichers, document type: {}",
+                mode, enrichers.size(), documentClass.getSimpleName());
 
         Set<String> enricherNames = enrichers.stream()
                 .map(EnricherConfig::getName)
@@ -74,8 +76,10 @@ public class PipelineOrchestrator {
                 .map(EnricherConfig::getName)
                 .collect(Collectors.toSet());
 
-        RealtimePipelineBuilder realtimeBuilder = new RealtimePipelineBuilder(env, config, kafkaSourceFactory);
-        ReflowPipelineBuilder reflowBuilder = new ReflowPipelineBuilder(env, config, kafkaSourceFactory);
+        RealtimePipelineBuilder realtimeBuilder = new RealtimePipelineBuilder(
+                env, config, kafkaSourceFactory, documentClass);
+        ReflowPipelineBuilder reflowBuilder = new ReflowPipelineBuilder(
+                env, config, kafkaSourceFactory, documentClass);
 
         List<DataStream<EnrichmentResult>> allResultStreams = new ArrayList<>();
 

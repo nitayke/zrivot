@@ -11,13 +11,15 @@ import java.util.List;
  *
  * <p>{@code nextSearchAfter} is {@code null} when there are no more pages to fetch,
  * signalling that the caller should stop paginating.</p>
+ *
+ * @param <T> the domain document type
  */
 @Data
 @AllArgsConstructor
-public class FetchBatchResult {
+public class FetchBatchResult<T> {
 
     /** Documents returned in this batch. */
-    private final List<RawDocument> documents;
+    private final List<RawDocument<T>> documents;
 
     /**
      * Sort values of the last hit — used as the {@code search_after} cursor for the next batch.

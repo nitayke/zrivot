@@ -39,7 +39,7 @@ import java.util.Set;
 public class EnrichmentJoinerFunction
         extends KeyedProcessFunction<String, EnrichmentResult, EnrichedDocument> {
 
-    private static final long serialVersionUID = 2L;
+    private static final long serialVersionUID = 3L;
 
     /** All enricher names — used for realtime documents. */
     private final Set<String> allEnricherNames;
@@ -53,8 +53,8 @@ public class EnrichmentJoinerFunction
      */
     private transient MapState<String, Map<String, Object>> enrichmentState;
 
-    /** Stores the original payload from the first result that arrives. */
-    private transient ValueState<Map<String, Object>> originalPayloadState;
+    /** Stores the original payload (typed domain object) from the first result that arrives. */
+    private transient ValueState<Object> originalPayloadState;
 
     /** Stores existing enrichments (from ES) when processing reflow documents. */
     private transient ValueState<Map<String, Map<String, Object>>> existingEnrichmentsState;
@@ -81,7 +81,7 @@ public class EnrichmentJoinerFunction
                 new MapStateDescriptor<>("enrichments", Types.STRING, Types.MAP(Types.STRING, Types.GENERIC(Object.class)))
         );
         originalPayloadState = getRuntimeContext().getState(
-                new ValueStateDescriptor<>("originalPayload", Types.MAP(Types.STRING, Types.GENERIC(Object.class)))
+                new ValueStateDescriptor<>("originalPayload", Types.GENERIC(Object.class))
         );
         existingEnrichmentsState = getRuntimeContext().getState(
                 new ValueStateDescriptor<>("existingEnrichments",
@@ -175,11 +175,11 @@ public class EnrichmentJoinerFunction
             // If failure and existing enrichment present, the existing one is preserved
         }
 
-        Map<String, Object> originalPayload = originalPayloadState.value();
+        Object originalPayload = originalPayloadState.value();
 
         EnrichedDocument doc = new EnrichedDocument(
                 documentId,
-                originalPayload != null ? originalPayload : new HashMap<>(),
+                originalPayload,
                 mergedEnrichments,
                 System.currentTimeMillis()
         );

@@ -25,12 +25,16 @@ public interface Enricher extends Serializable {
     /**
      * Enriches the given document payload by fetching/computing additional fields (synchronous).
      *
+     * <p>The payload is the typed domain object (e.g. PurchaseDocument).  Implementations
+     * that call external APIs can serialize it directly with Jackson.  Domain-specific
+     * enrichers can cast to the expected type for typed field access.</p>
+     *
      * @param documentId the unique document identifier
-     * @param payload    the current document fields
+     * @param payload    the domain document object
      * @return a map of new enriched fields to merge into the document
      * @throws Exception if the enrichment fails (the pipeline isolates failures per-enricher)
      */
-    Map<String, Object> enrich(String documentId, Map<String, Object> payload) throws Exception;
+    Map<String, Object> enrich(String documentId, Object payload) throws Exception;
 
     /**
      * Asynchronous variant of {@link #enrich}.  Implementations that perform I/O (HTTP calls,
@@ -41,11 +45,11 @@ public interface Enricher extends Serializable {
      * on a common ForkJoinPool thread — suitable only when no true async client is available.</p>
      *
      * @param documentId the unique document identifier
-     * @param payload    the current document fields
+     * @param payload    the domain document object
      * @return a future that completes with the enriched fields map
      */
     default CompletableFuture<Map<String, Object>> enrichAsync(String documentId,
-                                                                Map<String, Object> payload) {
+                                                                Object payload) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 return enrich(documentId, payload);

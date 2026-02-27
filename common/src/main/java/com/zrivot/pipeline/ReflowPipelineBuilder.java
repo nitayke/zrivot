@@ -38,13 +38,16 @@ public class ReflowPipelineBuilder {
     private final StreamExecutionEnvironment env;
     private final PipelineConfig config;
     private final KafkaSourceFactory kafkaSourceFactory;
+    private final Class<?> documentClass;
 
     public ReflowPipelineBuilder(StreamExecutionEnvironment env,
                                  PipelineConfig config,
-                                 KafkaSourceFactory kafkaSourceFactory) {
+                                 KafkaSourceFactory kafkaSourceFactory,
+                                 Class<?> documentClass) {
         this.env = env;
         this.config = config;
         this.kafkaSourceFactory = kafkaSourceFactory;
+        this.documentClass = documentClass;
     }
 
     /**
@@ -74,16 +77,17 @@ public class ReflowPipelineBuilder {
                 .name("reflow-count-slice-" + enricherName);
 
         // 3. KeyBy unique sliceKey for parallel, stateful document fetching
-        DataStream<RawDocument> reflowDocs = slices
+        DataStream<RawDocument<?>> reflowDocs = slices
                 .keyBy(ReflowSlice::getSliceKey)
-                .process(new ReflowDocumentFetchFunction(
+                .process(new ReflowDocumentFetchFunction<>(
                         config.getElasticsearch(),
-                        config.getReflow()
+                        config.getReflow(),
+                        documentClass
                 ))
                 .name("reflow-fetch-" + enricherName);
 
         // 4. KeyBy documentId → boomerang guard (uses keyed state to filter stale events)
-        DataStream<RawDocument> guardedDocs = reflowDocs
+        DataStream<RawDocument<?>> guardedDocs = reflowDocs
                 .keyBy(RawDocument::getDocumentId)
                 .process(new BoomerangEnrichmentFunction(enricherConfig))
                 .name("reflow-guard-" + enricherName);
