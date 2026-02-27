@@ -2,6 +2,7 @@ package com.zrivot.pipeline;
 
 import com.zrivot.config.EnricherConfig;
 import com.zrivot.config.PipelineConfig;
+import com.zrivot.enrichment.AsyncEnrichmentFunction;
 import com.zrivot.enrichment.BoomerangEnrichmentFunction;
 import com.zrivot.kafka.KafkaSourceFactory;
 import com.zrivot.model.EnrichmentResult;
@@ -11,8 +12,11 @@ import com.zrivot.reflow.ReflowCountAndSliceFunction;
 import com.zrivot.reflow.ReflowDocumentFetchFunction;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.streaming.api.datastream.AsyncDataStream;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+
+import java.util.concurrent.TimeUnit;
 
 /**
  * Builds the reflow sub-pipeline for a single enricher.
@@ -21,10 +25,11 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
  * <pre>
  *   [Reflow Kafka Topic]
  *       → ReflowCountAndSlice (count docs, decide whether to slice)
- *       → keyBy(sliceId) for parallel ES fetch
- *       → ReflowDocumentFetch (retrieve docs from ES)
- *       → keyBy(documentId) for boomerang-guarded enrichment
- *       → BoomerangEnrichmentFunction
+ *       → keyBy(sliceKey) for parallel stateful ES fetch
+ *       → ReflowDocumentFetch (checkpoint-recoverable search_after)
+ *       → keyBy(documentId) for boomerang guard
+ *       → BoomerangEnrichmentFunction (keyed state guard)
+ *       → AsyncDataStream (non-blocking enrichment)
  * </pre>
  */
 @Slf4j
@@ -77,10 +82,19 @@ public class ReflowPipelineBuilder {
                 ))
                 .name("reflow-fetch-" + enricherName);
 
-        // 4. KeyBy documentId and run through boomerang-guarded enrichment
-        return reflowDocs
+        // 4. KeyBy documentId → boomerang guard (uses keyed state to filter stale events)
+        DataStream<RawDocument> guardedDocs = reflowDocs
                 .keyBy(RawDocument::getDocumentId)
                 .process(new BoomerangEnrichmentFunction(enricherConfig))
-                .name("reflow-enrich-" + enricherName);
+                .name("reflow-guard-" + enricherName);
+
+        // 5. Async enrichment — non-blocking API calls via AsyncDataStream
+        return AsyncDataStream.unorderedWait(
+                guardedDocs,
+                new AsyncEnrichmentFunction(enricherConfig),
+                enricherConfig.getAsyncTimeoutMs(),
+                TimeUnit.MILLISECONDS,
+                enricherConfig.getAsyncCapacity()
+        ).name("reflow-async-enrich-" + enricherName);
     }
 }

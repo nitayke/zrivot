@@ -1,7 +1,6 @@
 package com.zrivot.enrichment;
 
 import com.zrivot.config.EnricherConfig;
-import com.zrivot.model.EnrichmentResult;
 import com.zrivot.model.RawDocument;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.common.state.ValueState;
@@ -12,27 +11,27 @@ import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
 
 /**
- * Flink keyed process function that guards enrichment execution with a boomerang update count check.
+ * Flink keyed process function that implements the boomerang update-count guard.
  *
  * <p>For each document (keyed by documentId):
  * <ol>
  *   <li>Checks if the incoming {@code boomerangUpdateCount} is greater than or equal to the
- *       stored state count. If not, the event is stale and is dropped.</li>
- *   <li>Delegates to the configured {@link Enricher} implementation.</li>
- *   <li>On success, emits an {@link EnrichmentResult} with the enriched fields.</li>
- *   <li>On failure, emits a failed {@link EnrichmentResult} so that the joiner can still proceed
- *       (one enricher failure does NOT block others).</li>
+ *       stored state count.  If not, the event is stale and is dropped.</li>
+ *   <li>On pass, emits the {@link RawDocument} downstream for asynchronous enrichment.</li>
  * </ol>
+ *
+ * <p>This function uses <b>keyed state</b> (which is not available inside a
+ * {@code RichAsyncFunction}), so the guard must be a separate operator placed
+ * <b>before</b> the async enrichment step.</p>
  */
 @Slf4j
 public class BoomerangEnrichmentFunction
-        extends KeyedProcessFunction<String, RawDocument, EnrichmentResult> {
+        extends KeyedProcessFunction<String, RawDocument, RawDocument> {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 2L;
 
     private final EnricherConfig enricherConfig;
 
-    private transient Enricher enricher;
     private transient ValueState<Long> updateCountState;
 
     public BoomerangEnrichmentFunction(EnricherConfig enricherConfig) {
@@ -43,10 +42,6 @@ public class BoomerangEnrichmentFunction
     public void open(Configuration parameters) throws Exception {
         super.open(parameters);
 
-        // Initialise the enricher via factory
-        this.enricher = EnricherFactory.create(enricherConfig);
-
-        // Register keyed state for the boomerang update counter
         ValueStateDescriptor<Long> descriptor = new ValueStateDescriptor<>(
                 "boomerangUpdateCount-" + enricherConfig.getName(),
                 Types.LONG
@@ -55,7 +50,7 @@ public class BoomerangEnrichmentFunction
     }
 
     @Override
-    public void processElement(RawDocument doc, Context ctx, Collector<EnrichmentResult> out)
+    public void processElement(RawDocument doc, Context ctx, Collector<RawDocument> out)
             throws Exception {
 
         String documentId = doc.getDocumentId();
@@ -70,42 +65,7 @@ public class BoomerangEnrichmentFunction
         }
         updateCountState.update(incomingCount);
 
-        // ── Execute enrichment (isolated: failure doesn't propagate) ─────
-        try {
-            var enrichedFields = enricher.enrich(documentId, doc.getPayload());
-
-            out.collect(EnrichmentResult.success(
-                    documentId,
-                    enricherConfig.getName(),
-                    enrichedFields,
-                    doc.getPayload(),
-                    incomingCount,
-                    doc.isReflow(),
-                    doc.getExistingEnrichments()
-            ));
-
-            log.debug("Enrichment success: doc={} enricher={}", documentId, enricherConfig.getName());
-        } catch (Exception e) {
-            log.error("Enrichment failed for doc={} enricher={}: {}",
-                    documentId, enricherConfig.getName(), e.getMessage(), e);
-
-            out.collect(EnrichmentResult.failure(
-                    documentId,
-                    enricherConfig.getName(),
-                    e.getMessage(),
-                    doc.getPayload(),
-                    incomingCount,
-                    doc.isReflow(),
-                    doc.getExistingEnrichments()
-            ));
-        }
-    }
-
-    @Override
-    public void close() throws Exception {
-        if (enricher != null) {
-            enricher.close();
-        }
-        super.close();
+        // Pass through — enrichment happens asynchronously in the next operator
+        out.collect(doc);
     }
 }

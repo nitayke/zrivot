@@ -2,14 +2,18 @@ package com.zrivot.pipeline;
 
 import com.zrivot.config.EnricherConfig;
 import com.zrivot.config.PipelineConfig;
+import com.zrivot.enrichment.AsyncEnrichmentFunction;
 import com.zrivot.enrichment.BoomerangEnrichmentFunction;
 import com.zrivot.kafka.KafkaSourceFactory;
 import com.zrivot.model.EnrichmentResult;
 import com.zrivot.model.RawDocument;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.streaming.api.datastream.AsyncDataStream;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+
+import java.util.concurrent.TimeUnit;
 
 /**
  * Builds the realtime enrichment sub-pipeline for a single enricher.
@@ -18,7 +22,8 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
  * <pre>
  *   [Raw Kafka Topic]
  *       → keyBy(documentId)
- *       → BoomerangEnrichmentFunction
+ *       → BoomerangEnrichmentFunction  (keyed state guard — filters stale events)
+ *       → AsyncDataStream              (non-blocking API enrichment)
  * </pre>
  *
  * <p>Each enricher reads from the same raw topic but uses its own consumer group,
@@ -57,10 +62,19 @@ public class RealtimePipelineBuilder {
                 .fromSource(rawSource, WatermarkStrategy.noWatermarks(),
                         "realtime-source-" + enricherName);
 
-        // KeyBy documentId and run through boomerang-guarded enrichment
-        return rawDocs
+        // 1. KeyBy documentId → boomerang guard (uses keyed state to filter stale events)
+        DataStream<RawDocument> guardedDocs = rawDocs
                 .keyBy(RawDocument::getDocumentId)
                 .process(new BoomerangEnrichmentFunction(enricherConfig))
-                .name("realtime-enrich-" + enricherName);
+                .name("realtime-guard-" + enricherName);
+
+        // 2. Async enrichment — non-blocking API calls via AsyncDataStream
+        return AsyncDataStream.unorderedWait(
+                guardedDocs,
+                new AsyncEnrichmentFunction(enricherConfig),
+                enricherConfig.getAsyncTimeoutMs(),
+                TimeUnit.MILLISECONDS,
+                enricherConfig.getAsyncCapacity()
+        ).name("realtime-async-enrich-" + enricherName);
     }
 }
