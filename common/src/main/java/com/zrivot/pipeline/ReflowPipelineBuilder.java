@@ -68,9 +68,9 @@ public class ReflowPipelineBuilder {
                 ))
                 .name("reflow-count-slice-" + enricherName);
 
-        // 3. KeyBy sliceId for parallel document fetching
+        // 3. KeyBy unique sliceKey for parallel, stateful document fetching
         DataStream<RawDocument> reflowDocs = slices
-                .keyBy(ReflowSlice::getSliceId)
+                .keyBy(ReflowSlice::getSliceKey)
                 .process(new ReflowDocumentFetchFunction(
                         config.getElasticsearch(),
                         config.getReflow()

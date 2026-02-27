@@ -10,6 +10,8 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.functions.ProcessFunction;
 import org.apache.flink.util.Collector;
 
+import java.util.UUID;
+
 /**
  * Converts a {@link ReflowMessage} into one or more {@link ReflowSlice}s.
  *
@@ -53,10 +55,12 @@ public class ReflowCountAndSliceFunction extends ProcessFunction<ReflowMessage, 
 
         var query = message.getQueryCriteria();
         String enricherName = message.getEnricherName();
+        String requestId = UUID.randomUUID().toString();
 
         try {
             long count = esService.countDocuments(index, query);
-            log.info("Reflow count for enricher={}: {} documents", enricherName, count);
+            log.info("Reflow count for enricher={} request={}: {} documents",
+                    enricherName, requestId, count);
 
             if (count == 0) {
                 log.info("No documents matched for reflow query, skipping. enricher={}", enricherName);
@@ -69,14 +73,15 @@ public class ReflowCountAndSliceFunction extends ProcessFunction<ReflowMessage, 
                         reflowConfig.getMaxSlices(),
                         (int) Math.ceil((double) count / reflowConfig.getSliceThreshold())
                 );
-                log.info("Slicing reflow query into {} slices for enricher={}", numSlices, enricherName);
+                log.info("Slicing reflow query into {} slices for enricher={} request={}",
+                        numSlices, enricherName, requestId);
 
                 for (int i = 0; i < numSlices; i++) {
-                    out.collect(new ReflowSlice(enricherName, query, i, numSlices, index));
+                    out.collect(new ReflowSlice(requestId, enricherName, query, i, numSlices, index));
                 }
             } else {
                 // Small enough to handle as a single slice
-                out.collect(ReflowSlice.unsliced(enricherName, query, index));
+                out.collect(ReflowSlice.unsliced(requestId, enricherName, query, index));
             }
         } catch (Exception e) {
             log.error("Failed to count documents for reflow enricher={}: {}",

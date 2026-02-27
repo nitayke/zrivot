@@ -87,79 +87,100 @@ public class ElasticsearchService implements Closeable {
     }
 
     /**
-     * Fetches documents from Elasticsearch matching the given slice specification.
-     * Uses scroll-like pagination via search_after for large result sets.
+     * Fetches a <b>single batch</b> of documents from Elasticsearch using {@code search_after}
+     * pagination.
      *
-     * @param slice     the slice to fetch
-     * @param batchSize number of documents per batch
-     * @return all matching documents as {@link RawDocument} instances
+     * <p>This is the building-block for checkpoint-recoverable fetching: the caller (Flink
+     * operator) stores the returned {@code nextSearchAfter} cursor in keyed state, so that after
+     * a crash the operator can resume from the last checkpointed position instead of re-fetching
+     * everything from scratch.</p>
+     *
+     * <p>Uses the <b>synchronous</b> ES client intentionally — each batch must complete and its
+     * cursor must be persisted to Flink state before moving to the next batch.  An asynchronous
+     * fetch would make it impossible to guarantee the cursor is checkpointed between batches.</p>
+     *
+     * @param slice       the slice to query
+     * @param batchSize   max documents per batch
+     * @param searchAfter the cursor from the previous batch, or {@code null} for the first page
+     * @return batch result containing documents and the cursor for the next page (null if done)
      */
     @SuppressWarnings("unchecked")
+    public FetchBatchResult fetchBatch(ReflowSlice slice, int batchSize,
+                                       List<String> searchAfter) throws IOException {
+
+        SearchRequest.Builder searchBuilder = new SearchRequest.Builder()
+                .index(slice.getIndex())
+                .size(batchSize)
+                .sort(s -> s.field(f -> f.field("_id")));
+
+        // Apply the query
+        searchBuilder.query(q -> q.withJson(
+                new java.io.ByteArrayInputStream(
+                        objectMapper.writeValueAsBytes(slice.getQuery()))
+        ));
+
+        // Apply slicing if needed
+        if (slice.isSliced()) {
+            final int sId = slice.getSliceId();
+            final int sMax = slice.getMaxSlices();
+            searchBuilder.slice(sl -> sl.id(String.valueOf(sId)).max(sMax));
+        }
+
+        // Apply search_after cursor for pagination
+        if (searchAfter != null) {
+            searchBuilder.searchAfter(searchAfter.stream()
+                    .map(v -> co.elastic.clients.json.JsonData.of(v))
+                    .toList());
+        }
+
+        SearchResponse<Map> response = client.search(searchBuilder.build(), Map.class);
+        List<Hit<Map>> hits = response.hits().hits();
+
+        List<RawDocument> documents = new ArrayList<>();
+        for (Hit<Map> hit : hits) {
+            Map<String, Object> source = hit.source();
+            if (source != null) {
+                documents.add(RawDocument.builder()
+                        .documentId(hit.id())
+                        .payload(source)
+                        .boomerangUpdateCount(extractUpdateCount(source))
+                        .reflow(true)
+                        .existingEnrichments(extractEnrichments(source))
+                        .build());
+            }
+        }
+
+        // Determine next cursor — null signals "no more pages"
+        List<String> nextSearchAfter = null;
+        if (!hits.isEmpty() && hits.size() >= batchSize) {
+            Hit<Map> lastHit = hits.get(hits.size() - 1);
+            if (lastHit.sort() != null && !lastHit.sort().isEmpty()) {
+                nextSearchAfter = lastHit.sort().stream()
+                        .map(Object::toString)
+                        .toList();
+            }
+        }
+
+        return new FetchBatchResult(documents, nextSearchAfter);
+    }
+
+    /**
+     * Convenience method that fetches <b>all</b> documents matching a slice by repeatedly
+     * calling {@link #fetchBatch}.  Useful for tests or non-Flink callers that do not need
+     * checkpoint recovery.
+     */
     public List<RawDocument> fetchDocuments(ReflowSlice slice, int batchSize) throws IOException {
         List<RawDocument> results = new ArrayList<>();
         List<String> searchAfter = null;
-        boolean hasMore = true;
 
-        while (hasMore) {
-            SearchRequest.Builder searchBuilder = new SearchRequest.Builder()
-                    .index(slice.getIndex())
-                    .size(batchSize)
-                    .sort(s -> s.field(f -> f.field("_id")));
+        while (true) {
+            FetchBatchResult batch = fetchBatch(slice, batchSize, searchAfter);
+            results.addAll(batch.getDocuments());
 
-            // Apply the query
-            searchBuilder.query(q -> q.withJson(
-                    new java.io.ByteArrayInputStream(
-                            objectMapper.writeValueAsBytes(slice.getQuery()))
-            ));
-
-            // Apply slicing if needed
-            if (slice.isSliced()) {
-                final int sId = slice.getSliceId();
-                final int sMax = slice.getMaxSlices();
-                searchBuilder.slice(sl -> sl.id(String.valueOf(sId)).max(sMax));
+            if (!batch.hasMore()) {
+                break;
             }
-
-            // Apply search_after for pagination
-            if (searchAfter != null) {
-                searchBuilder.searchAfter(searchAfter.stream()
-                        .map(v -> co.elastic.clients.json.JsonData.of(v))
-                        .toList());
-            }
-
-            SearchResponse<Map> response = client.search(searchBuilder.build(), Map.class);
-            List<Hit<Map>> hits = response.hits().hits();
-
-            if (hits.isEmpty()) {
-                hasMore = false;
-            } else {
-                for (Hit<Map> hit : hits) {
-                    Map<String, Object> source = hit.source();
-                    if (source != null) {
-                        RawDocument doc = RawDocument.builder()
-                                .documentId(hit.id())
-                                .payload(source)
-                                .boomerangUpdateCount(extractUpdateCount(source))
-                                .reflow(true)
-                                .existingEnrichments(extractEnrichments(source))
-                                .build();
-                        results.add(doc);
-                    }
-                }
-
-                // Update search_after with the last hit's sort values
-                Hit<Map> lastHit = hits.get(hits.size() - 1);
-                if (lastHit.sort() != null && !lastHit.sort().isEmpty()) {
-                    searchAfter = lastHit.sort().stream()
-                            .map(Object::toString)
-                            .toList();
-                } else {
-                    hasMore = false;
-                }
-
-                if (hits.size() < batchSize) {
-                    hasMore = false;
-                }
-            }
+            searchAfter = batch.getNextSearchAfter();
         }
 
         log.info("Fetched {} documents for slice {}", results.size(), slice);
