@@ -7,6 +7,9 @@ import com.zrivot.model.EnrichmentResult;
 import com.zrivot.model.RawDocument;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.common.functions.OpenContext;
+import org.apache.flink.api.connector.source.util.ratelimit.GuavaRateLimiter;
+import org.apache.flink.api.connector.source.util.ratelimit.NoOpRateLimiter;
+import org.apache.flink.api.connector.source.util.ratelimit.RateLimiter;
 import org.apache.flink.streaming.api.functions.async.ResultFuture;
 import org.apache.flink.streaming.api.functions.async.RichAsyncFunction;
 
@@ -44,7 +47,9 @@ import java.util.stream.Collectors;
  *
  * <h3>Rate limiting (point 1)</h3>
  * <p>Each bulk request counts as <b>one</b> API request toward the enricher's
- * per-operator rate limit.</p>
+ * per-operator rate limit, enforced by Flink's built-in {@link RateLimiter}
+ * ({@link GuavaRateLimiter} when the rate is positive, {@link NoOpRateLimiter}
+ * when disabled).</p>
  *
  * <h3>Concurrency control (point 5)</h3>
  * <p>The JVM-wide {@link SharedEnrichmentExecutor} semaphore limits concurrent API
@@ -57,7 +62,7 @@ import java.util.stream.Collectors;
 public class AsyncBulkEnrichmentFunction
         extends RichAsyncFunction<RawDocument, EnrichmentResult> {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 2L;
 
     /** How long to wait before flushing a partial batch (ms). */
     private static final long FLUSH_DELAY_MS = 2_000;
@@ -69,7 +74,7 @@ public class AsyncBulkEnrichmentFunction
 
     private transient Enricher enricher;
     private transient ElasticsearchService esService;
-    private transient EnrichmentRateLimiter rateLimiter;
+    private transient RateLimiter rateLimiter;
 
     // ── Internal buffer (synchronised on `lock`) ──────────────────────
     private final Object lock = new Object();
@@ -96,7 +101,10 @@ public class AsyncBulkEnrichmentFunction
         this.enricher = EnricherFactory.create(enricherConfig);
         this.enricher.configureExecutor(SharedEnrichmentExecutor.executor());
         this.esService = new ElasticsearchService(esConfig);
-        this.rateLimiter = new EnrichmentRateLimiter(enricherConfig.getRateLimitPerSecond());
+        int ratePerSec = enricherConfig.getRateLimitPerSecond();
+        this.rateLimiter = ratePerSec > 0
+                ? new GuavaRateLimiter(ratePerSec)
+                : new NoOpRateLimiter();
 
         this.buffer = new ArrayList<>();
         this.pendingFutures = new ArrayList<>();
@@ -147,9 +155,7 @@ public class AsyncBulkEnrichmentFunction
         List<Map<String, Object>> payloads = batch.stream()
                 .map(RawDocument::getPayload).collect(Collectors.toList());
 
-        long waitMicros = rateLimiter.reservePermitMicros();
-
-        SharedEnrichmentExecutor.scheduleWithConcurrency(waitMicros, () ->
+        SharedEnrichmentExecutor.executeWithConcurrency(rateLimiter, () ->
                 enricher.enrichBulkAsync(docIds, payloads)
                         .whenComplete((results, throwable) -> {
                             SharedEnrichmentExecutor.releaseConcurrencyPermit();
@@ -212,9 +218,7 @@ public class AsyncBulkEnrichmentFunction
                 List<Map<String, Object>> freshPayloads = freshDocs.stream()
                         .map(RawDocument::getPayload).collect(Collectors.toList());
 
-                long waitMicros = rateLimiter.reservePermitMicros();
-
-                SharedEnrichmentExecutor.scheduleWithConcurrency(waitMicros, () ->
+                SharedEnrichmentExecutor.executeWithConcurrency(rateLimiter, () ->
                         enricher.enrichBulkAsync(freshIds, freshPayloads)
                                 .whenComplete((results, throwable) -> {
                                     SharedEnrichmentExecutor.releaseConcurrencyPermit();

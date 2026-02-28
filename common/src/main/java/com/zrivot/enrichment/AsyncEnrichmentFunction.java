@@ -7,6 +7,9 @@ import com.zrivot.model.EnrichmentResult;
 import com.zrivot.model.RawDocument;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.common.functions.OpenContext;
+import org.apache.flink.api.connector.source.util.ratelimit.GuavaRateLimiter;
+import org.apache.flink.api.connector.source.util.ratelimit.NoOpRateLimiter;
+import org.apache.flink.api.connector.source.util.ratelimit.RateLimiter;
 import org.apache.flink.streaming.api.functions.async.ResultFuture;
 import org.apache.flink.streaming.api.functions.async.RichAsyncFunction;
 
@@ -19,11 +22,11 @@ import java.util.concurrent.TimeUnit;
  * without blocking the task thread.
  *
  * <h3>Rate limiting (point 1)</h3>
- * <p>Each enricher has a configurable {@code rateLimitPerSecond}.  Before issuing the
- * API call, the operator reserves a token from a per-operator
- * {@link EnrichmentRateLimiter}.  If the rate is exceeded, the call is scheduled after
- * the appropriate delay on the {@link SharedEnrichmentExecutor} thread pool — the Flink
- * task thread is <b>never</b> blocked.</p>
+ * <p>Each enricher has a configurable {@code rateLimitPerSecond}.  The operator uses
+ * Flink's built-in {@link RateLimiter} — a {@link GuavaRateLimiter} when the rate is
+ * positive, or a {@link NoOpRateLimiter} when rate limiting is disabled ({@code 0}).
+ * The rate-limit acquire runs on the {@link SharedEnrichmentExecutor} thread pool,
+ * so the Flink task thread is <b>never</b> blocked.</p>
  *
  * <h3>Concurrency control (point 5)</h3>
  * <p>A JVM-wide {@link SharedEnrichmentExecutor} semaphore limits the total number of
@@ -38,7 +41,7 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class AsyncEnrichmentFunction extends RichAsyncFunction<RawDocument, EnrichmentResult> {
 
-    private static final long serialVersionUID = 4L;
+    private static final long serialVersionUID = 5L;
 
     private final EnricherConfig enricherConfig;
     private final ElasticsearchConfig esConfig;
@@ -47,7 +50,7 @@ public class AsyncEnrichmentFunction extends RichAsyncFunction<RawDocument, Enri
 
     private transient Enricher enricher;
     private transient ElasticsearchService esService;
-    private transient EnrichmentRateLimiter rateLimiter;
+    private transient RateLimiter rateLimiter;
 
     public AsyncEnrichmentFunction(EnricherConfig enricherConfig,
                                    ElasticsearchConfig esConfig,
@@ -67,16 +70,17 @@ public class AsyncEnrichmentFunction extends RichAsyncFunction<RawDocument, Enri
         this.enricher = EnricherFactory.create(enricherConfig);
         this.enricher.configureExecutor(SharedEnrichmentExecutor.executor());
         this.esService = new ElasticsearchService(esConfig);
-        this.rateLimiter = new EnrichmentRateLimiter(enricherConfig.getRateLimitPerSecond());
+        int ratePerSec = enricherConfig.getRateLimitPerSecond();
+        this.rateLimiter = ratePerSec > 0
+                ? new GuavaRateLimiter(ratePerSec)
+                : new NoOpRateLimiter();
     }
 
     // ── asyncInvoke ──────────────────────────────────────────────────────
 
     @Override
     public void asyncInvoke(RawDocument doc, ResultFuture<EnrichmentResult> resultFuture) {
-        long waitMicros = rateLimiter.reservePermitMicros();
-
-        SharedEnrichmentExecutor.scheduleWithConcurrency(waitMicros, () ->
+        SharedEnrichmentExecutor.executeWithConcurrency(rateLimiter, () ->
                 enricher.enrichAsync(doc.getDocumentId(), doc.getPayload())
                         .whenComplete((enrichedFields, throwable) -> {
                             SharedEnrichmentExecutor.releaseConcurrencyPermit();
@@ -130,8 +134,7 @@ public class AsyncEnrichmentFunction extends RichAsyncFunction<RawDocument, Enri
                 freshDoc.setExistingEnrichments(originalDoc.getExistingEnrichments());
 
                 // Rate-limit the retry as well
-                long waitMicros = rateLimiter.reservePermitMicros();
-                SharedEnrichmentExecutor.scheduleWithConcurrency(waitMicros, () ->
+                SharedEnrichmentExecutor.executeWithConcurrency(rateLimiter, () ->
                         enricher.enrichAsync(freshDoc.getDocumentId(), freshDoc.getPayload())
                                 .whenComplete((enrichedFields, throwable) -> {
                                     SharedEnrichmentExecutor.releaseConcurrencyPermit();
