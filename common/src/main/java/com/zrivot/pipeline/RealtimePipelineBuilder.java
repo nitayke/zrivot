@@ -96,7 +96,8 @@ public class RealtimePipelineBuilder {
                     enricherConfig.getAsyncTimeoutMs(),
                     TimeUnit.MILLISECONDS,
                     enricherConfig.getAsyncCapacity()
-            ).name("realtime-bulk-enrich-" + enricherName);
+            ).name("realtime-bulk-enrich-" + enricherName)
+             .setParallelism(enricherConfig.getParallelism());
         } else {
             return AsyncDataStream.orderedWait(
                     enricherInput,
@@ -108,7 +109,8 @@ public class RealtimePipelineBuilder {
                     enricherConfig.getAsyncTimeoutMs(),
                     TimeUnit.MILLISECONDS,
                     enricherConfig.getAsyncCapacity()
-            ).name("realtime-async-enrich-" + enricherName);
+            ).name("realtime-async-enrich-" + enricherName)
+             .setParallelism(enricherConfig.getParallelism());
         }
     }
 }

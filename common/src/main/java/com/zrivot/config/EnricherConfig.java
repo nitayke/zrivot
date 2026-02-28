@@ -14,6 +14,8 @@ import java.util.Map;
 @Data
 @NoArgsConstructor
 public class EnricherConfig implements Serializable {
+    /** Parallelism for this enricher's pipeline operators. Default: 1 */
+    private int parallelism = 1;
 
     private static final long serialVersionUID = 2L;
 
