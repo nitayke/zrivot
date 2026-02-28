@@ -25,13 +25,8 @@ import java.util.concurrent.TimeUnit;
  * <p>Each enricher has a configurable {@code rateLimitPerSecond}.  The operator uses
  * Flink's built-in {@link RateLimiter} — a {@link GuavaRateLimiter} when the rate is
  * positive, or a {@link NoOpRateLimiter} when rate limiting is disabled ({@code 0}).
- * The rate-limit acquire runs on the {@link SharedEnrichmentExecutor} thread pool,
- * so the Flink task thread is <b>never</b> blocked.</p>
- *
- * <h3>Concurrency control (point 5)</h3>
- * <p>A JVM-wide {@link SharedEnrichmentExecutor} semaphore limits the total number of
- * concurrent API requests across all enrichers on the same task manager, preventing
- * thread-pool exhaustion when many enrichers run in parallel.</p>
+ * The rate-limit acquire runs on the Flink task thread, and HTTP client connection pooling
+ * is handled by the built-in HttpClient. Each enricher manages its own rate limit and connection pool.</p>
  *
  * <h3>Retry with re-fetch (reflow only)</h3>
  * <p>When enrichment fails for a <b>reflow</b> document, the function schedules a
@@ -65,25 +60,21 @@ public class AsyncEnrichmentFunction extends RichAsyncFunction<RawDocument, Enri
     @Override
     public void open(OpenContext openContext) throws Exception {
         super.open(openContext);
-        SharedEnrichmentExecutor.initialize(maxConcurrentApiRequests);
-
         this.enricher = EnricherFactory.create(enricherConfig);
-        this.enricher.configureExecutor(SharedEnrichmentExecutor.executor());
         this.esService = new ElasticsearchService(esConfig);
         int ratePerSec = enricherConfig.getRateLimitPerSecond();
         this.rateLimiter = ratePerSec > 0
-                ? new GuavaRateLimiter(ratePerSec)
-                : new NoOpRateLimiter();
+            ? new GuavaRateLimiter(ratePerSec)
+            : new NoOpRateLimiter();
     }
 
     // ── asyncInvoke ──────────────────────────────────────────────────────
 
     @Override
     public void asyncInvoke(RawDocument doc, ResultFuture<EnrichmentResult> resultFuture) {
-        SharedEnrichmentExecutor.executeWithConcurrency(rateLimiter, () ->
+        rateLimiter.acquire().toCompletableFuture().thenRunAsync(() ->
                 enricher.enrichAsync(doc.getDocumentId(), doc.getPayload())
                         .whenComplete((enrichedFields, throwable) -> {
-                            SharedEnrichmentExecutor.releaseConcurrencyPermit();
                             handleResult(doc, resultFuture, enrichedFields, throwable);
                         })
         );
@@ -114,7 +105,7 @@ public class AsyncEnrichmentFunction extends RichAsyncFunction<RawDocument, Enri
     private void retryWithRefetch(RawDocument originalDoc,
                                   ResultFuture<EnrichmentResult> resultFuture,
                                   int retriesLeft) {
-        SharedEnrichmentExecutor.executor().execute(() -> {
+        new Thread(() -> {
             try {
                 TimeUnit.MILLISECONDS.sleep(enricherConfig.getRetryDelayMs());
 
@@ -134,11 +125,9 @@ public class AsyncEnrichmentFunction extends RichAsyncFunction<RawDocument, Enri
                 freshDoc.setExistingEnrichments(originalDoc.getExistingEnrichments());
 
                 // Rate-limit the retry as well
-                SharedEnrichmentExecutor.executeWithConcurrency(rateLimiter, () ->
+                rateLimiter.acquire().toCompletableFuture().thenRunAsync(() ->
                         enricher.enrichAsync(freshDoc.getDocumentId(), freshDoc.getPayload())
                                 .whenComplete((enrichedFields, throwable) -> {
-                                    SharedEnrichmentExecutor.releaseConcurrencyPermit();
-
                                     if (throwable != null) {
                                         Throwable cause = throwable.getCause() != null
                                                 ? throwable.getCause() : throwable;
@@ -166,7 +155,7 @@ public class AsyncEnrichmentFunction extends RichAsyncFunction<RawDocument, Enri
                     emitFailure(originalDoc, resultFuture, "Re-fetch failed: " + e.getMessage());
                 }
             }
-        });
+        }).start();
     }
 
     // ── Emit helpers ─────────────────────────────────────────────────────

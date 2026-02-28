@@ -51,9 +51,8 @@ import java.util.stream.Collectors;
  * ({@link GuavaRateLimiter} when the rate is positive, {@link NoOpRateLimiter}
  * when disabled).</p>
  *
- * <h3>Concurrency control (point 5)</h3>
- * <p>The JVM-wide {@link SharedEnrichmentExecutor} semaphore limits concurrent API
- * requests across all enrichers on the same task manager.</p>
+ * <h3>Connection pooling</h3>
+ * <p>Each enricher uses its own HTTP client connection pool. Rate limiting is per-enricher.</p>
  *
  * <h3>Retry with re-fetch (reflow only)</h3>
  * <p>On failure for reflow documents: wait → re-fetch from ES → retry bulk call.</p>
@@ -96,15 +95,12 @@ public class AsyncBulkEnrichmentFunction
     @Override
     public void open(OpenContext openContext) throws Exception {
         super.open(openContext);
-        SharedEnrichmentExecutor.initialize(maxConcurrentApiRequests);
-
         this.enricher = EnricherFactory.create(enricherConfig);
-        this.enricher.configureExecutor(SharedEnrichmentExecutor.executor());
         this.esService = new ElasticsearchService(esConfig);
         int ratePerSec = enricherConfig.getRateLimitPerSecond();
         this.rateLimiter = ratePerSec > 0
-                ? new GuavaRateLimiter(ratePerSec)
-                : new NoOpRateLimiter();
+            ? new GuavaRateLimiter(ratePerSec)
+            : new NoOpRateLimiter();
 
         this.buffer = new ArrayList<>();
         this.pendingFutures = new ArrayList<>();
@@ -155,11 +151,9 @@ public class AsyncBulkEnrichmentFunction
         List<Map<String, Object>> payloads = batch.stream()
                 .map(RawDocument::getPayload).collect(Collectors.toList());
 
-        SharedEnrichmentExecutor.executeWithConcurrency(rateLimiter, () ->
+        rateLimiter.acquire().toCompletableFuture().thenRunAsync(() ->
                 enricher.enrichBulkAsync(docIds, payloads)
                         .whenComplete((results, throwable) -> {
-                            SharedEnrichmentExecutor.releaseConcurrencyPermit();
-
                             if (throwable != null) {
                                 Throwable cause = throwable.getCause() != null
                                         ? throwable.getCause() : throwable;
@@ -186,7 +180,7 @@ public class AsyncBulkEnrichmentFunction
     private void retryWithRefetch(List<RawDocument> batch,
                                   List<ResultFuture<EnrichmentResult>> futures,
                                   int retriesLeft) {
-        SharedEnrichmentExecutor.executor().execute(() -> {
+        new Thread(() -> {
             try {
                 TimeUnit.MILLISECONDS.sleep(enricherConfig.getRetryDelayMs());
 
@@ -218,11 +212,9 @@ public class AsyncBulkEnrichmentFunction
                 List<Map<String, Object>> freshPayloads = freshDocs.stream()
                         .map(RawDocument::getPayload).collect(Collectors.toList());
 
-                SharedEnrichmentExecutor.executeWithConcurrency(rateLimiter, () ->
+                rateLimiter.acquire().toCompletableFuture().thenRunAsync(() ->
                         enricher.enrichBulkAsync(freshIds, freshPayloads)
                                 .whenComplete((results, throwable) -> {
-                                    SharedEnrichmentExecutor.releaseConcurrencyPermit();
-
                                     if (throwable != null) {
                                         if (retriesLeft > 1) {
                                             retryWithRefetch(batch, futures,
@@ -247,7 +239,7 @@ public class AsyncBulkEnrichmentFunction
                     emitFailures(batch, futures, "Re-fetch failed: " + e.getMessage());
                 }
             }
-        });
+        }).start();
     }
 
     // ── Emit helpers ─────────────────────────────────────────────────────

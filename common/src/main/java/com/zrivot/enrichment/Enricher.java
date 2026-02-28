@@ -38,20 +38,6 @@ public interface Enricher extends Serializable {
      */
     void init(EnricherConfig config);
 
-    /**
-     * Injects a shared {@link ExecutorService} for async I/O.
-     *
-     * <p>Called once after {@link #init} by the Flink operator.  Implementations
-     * that create their own async primitives (e.g.&nbsp;{@code HttpClient}) should
-     * rebuild them using this executor so that all enrichers on the same task-manager
-     * share a single thread-pool.</p>
-     *
-     * @param executor the JVM-wide shared executor
-     */
-    default void configureExecutor(ExecutorService executor) {
-        // no-op by default
-    }
-
     // ── Mapping hooks ────────────────────────────────────────────────────
 
     /**
