@@ -4,6 +4,7 @@ import com.zrivot.config.EnricherConfig;
 import com.zrivot.config.PipelineConfig;
 import com.zrivot.enrichment.AsyncEnrichmentFunction;
 import com.zrivot.enrichment.BoomerangEnrichmentFunction;
+import com.zrivot.enrichment.BulkEnrichmentFunction;
 import com.zrivot.kafka.KafkaSourceFactory;
 import com.zrivot.model.EnrichmentResult;
 import com.zrivot.model.RawDocument;
@@ -24,12 +25,13 @@ import java.util.concurrent.TimeUnit;
  * <p>Reflow pipeline per enricher:
  * <pre>
  *   [Reflow Kafka Topic]
- *       → ReflowCountAndSlice (count docs, decide whether to slice)
+ *       → ReflowCountAndSlice (maps query via enricher, count docs, decide whether to slice)
  *       → keyBy(sliceKey) for parallel stateful ES fetch
- *       → ReflowDocumentFetch (checkpoint-recoverable search_after)
+ *       → ReflowDocumentFetch (checkpoint-recoverable search_after, configurable sort)
  *       → keyBy(documentId) for boomerang guard
  *       → BoomerangEnrichmentFunction (keyed state guard)
- *       → AsyncDataStream (non-blocking enrichment)
+ *       → AsyncDataStream.orderedWait (preserves order)
+ *         OR BulkEnrichmentFunction (batch enrichment)
  * </pre>
  */
 @Slf4j
@@ -38,16 +40,13 @@ public class ReflowPipelineBuilder {
     private final StreamExecutionEnvironment env;
     private final PipelineConfig config;
     private final KafkaSourceFactory kafkaSourceFactory;
-    private final Class<?> documentClass;
 
     public ReflowPipelineBuilder(StreamExecutionEnvironment env,
                                  PipelineConfig config,
-                                 KafkaSourceFactory kafkaSourceFactory,
-                                 Class<?> documentClass) {
+                                 KafkaSourceFactory kafkaSourceFactory) {
         this.env = env;
         this.config = config;
         this.kafkaSourceFactory = kafkaSourceFactory;
-        this.documentClass = documentClass;
     }
 
     /**
@@ -67,38 +66,52 @@ public class ReflowPipelineBuilder {
                 .fromSource(reflowSource, WatermarkStrategy.noWatermarks(),
                         "reflow-source-" + enricherName);
 
-        // 2. Count documents and split into slices if needed
+        // 2. Map reflow criteria → ES query via enricher, count documents, split into slices
         DataStream<ReflowSlice> slices = reflowMessages
                 .process(new ReflowCountAndSliceFunction(
                         config.getElasticsearch(),
                         config.getReflow(),
+                        enricherConfig,
                         config.getElasticsearch().getIndex()
                 ))
                 .name("reflow-count-slice-" + enricherName);
 
         // 3. KeyBy unique sliceKey for parallel, stateful document fetching
-        DataStream<RawDocument<?>> reflowDocs = slices
+        DataStream<RawDocument> reflowDocs = slices
                 .keyBy(ReflowSlice::getSliceKey)
-                .process(new ReflowDocumentFetchFunction<>(
+                .process(new ReflowDocumentFetchFunction(
                         config.getElasticsearch(),
-                        config.getReflow(),
-                        documentClass
+                        config.getReflow()
                 ))
                 .name("reflow-fetch-" + enricherName);
 
         // 4. KeyBy documentId → boomerang guard (uses keyed state to filter stale events)
-        DataStream<RawDocument<?>> guardedDocs = reflowDocs
+        DataStream<RawDocument> guardedDocs = reflowDocs
                 .keyBy(RawDocument::getDocumentId)
                 .process(new BoomerangEnrichmentFunction(enricherConfig))
                 .name("reflow-guard-" + enricherName);
 
-        // 5. Async enrichment — non-blocking API calls via AsyncDataStream
-        return AsyncDataStream.unorderedWait(
-                guardedDocs,
-                new AsyncEnrichmentFunction(enricherConfig),
-                enricherConfig.getAsyncTimeoutMs(),
-                TimeUnit.MILLISECONDS,
-                enricherConfig.getAsyncCapacity()
-        ).name("reflow-async-enrich-" + enricherName);
+        // 5. Choose enrichment path: bulk or single-document async
+        if (enricherConfig.isBulkEnabled()) {
+            return guardedDocs
+                    .keyBy(doc -> "bulk")
+                    .process(new BulkEnrichmentFunction(
+                            enricherConfig,
+                            config.getElasticsearch(),
+                            config.getElasticsearch().getIndex()))
+                    .name("reflow-bulk-enrich-" + enricherName);
+        } else {
+            // Async enrichment with orderedWait to preserve message ordering
+            return AsyncDataStream.orderedWait(
+                    guardedDocs,
+                    new AsyncEnrichmentFunction(
+                            enricherConfig,
+                            config.getElasticsearch(),
+                            config.getElasticsearch().getIndex()),
+                    enricherConfig.getAsyncTimeoutMs(),
+                    TimeUnit.MILLISECONDS,
+                    enricherConfig.getAsyncCapacity()
+            ).name("reflow-async-enrich-" + enricherName);
+        }
     }
 }

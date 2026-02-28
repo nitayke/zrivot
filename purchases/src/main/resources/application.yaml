@@ -3,7 +3,6 @@ spring:
     web-application-type: none
 
 zrivot:
-  document-class-name: com.zrivot.purchases.model.PurchaseDocument
   pipeline:
     mode: REALTIME  # REALTIME or OFFLINE
   kafka:
@@ -24,20 +23,31 @@ zrivot:
     slice-threshold: 10000
     max-slices: 10
     fetch-batch-size: 1000
+    sort-field: startTime  # sort by this field DESC then _id ASC; omit for _id-only sort
   enrichers:
     - name: purchase-geo-enricher
-      consumer-group: purchase-geo-enricher-group
+      consumer-group: purchase-geo-enricher-group       # not required in OFFLINE mode
       reflow-enabled: true
       reflow-topic: reflow-purchase-geo
       reflow-consumer-group: reflow-purchase-geo-group
       class-name: com.zrivot.enrichment.ApiEnricher
+      bulk-enabled: false
+      bulk-size: 10
+      retry-delay-ms: 5000
+      max-retries: 3
       properties:
         apiUrl: http://geo-service:8080/enrich
+        bulkApiUrl: http://geo-service:8080/enrich/bulk
         timeoutMs: "5000"
     - name: purchase-fraud-enricher
-      consumer-group: purchase-fraud-enricher-group
+      consumer-group: purchase-fraud-enricher-group       # not required in OFFLINE mode
       reflow-enabled: false
       class-name: com.zrivot.enrichment.ApiEnricher
+      bulk-enabled: true
+      bulk-size: 20
+      retry-delay-ms: 5000
+      max-retries: 3
       properties:
         apiUrl: http://fraud-service:8080/enrich
+        bulkApiUrl: http://fraud-service:8080/enrich/bulk
         timeoutMs: "5000"

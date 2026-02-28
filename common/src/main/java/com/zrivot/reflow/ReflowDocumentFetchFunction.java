@@ -7,12 +7,12 @@ import com.zrivot.elasticsearch.FetchBatchResult;
 import com.zrivot.model.RawDocument;
 import com.zrivot.model.ReflowSlice;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.common.typeinfo.Types;
-import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.TimerService;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
@@ -36,46 +36,35 @@ import java.util.List;
  *       resumes from exactly where it left off instead of re-fetching everything.</li>
  * </ol>
  *
- * <h3>Why synchronous ES calls?</h3>
- * <p>We intentionally use the <b>synchronous</b> Elasticsearch client.  Each batch must
- * complete, its documents must be emitted, and its cursor must be persisted to Flink state
- * <b>before</b> we move to the next batch.  An async call would decouple the fetch from the
- * checkpoint barrier, making it impossible to guarantee the cursor is consistent with the
- * checkpoint.</p>
- *
- * <p>This operator must be placed after a {@code keyBy(ReflowSlice::getSliceKey)} so that
- * each unique slice has its own isolated state partition.</p>
+ * <h3>Sort order</h3>
+ * <p>Uses the configurable {@code sortField} from {@link ReflowConfig} to sort by a time
+ * field descending (newest first), then by {@code _id}.  This ensures the most recent
+ * documents are processed first.</p>
  */
 @Slf4j
-public class ReflowDocumentFetchFunction<T>
-        extends KeyedProcessFunction<String, ReflowSlice, RawDocument<T>> {
+public class ReflowDocumentFetchFunction
+        extends KeyedProcessFunction<String, ReflowSlice, RawDocument> {
 
-    private static final long serialVersionUID = 3L;
+    private static final long serialVersionUID = 4L;
 
     private final ElasticsearchConfig esConfig;
     private final ReflowConfig reflowConfig;
-    private final Class<T> documentClass;
 
     private transient ElasticsearchService esService;
 
     // ---- Flink keyed state — checkpointed and restored on crash recovery ----
-    /** The slice currently being fetched for this key. */
     private transient ValueState<ReflowSlice> sliceState;
-    /** The search_after cursor values from the last completed batch. */
     private transient ListState<String> searchAfterState;
-    /** Running total of documents emitted so far (for logging). */
     private transient ValueState<Long> fetchedCountState;
 
-    public ReflowDocumentFetchFunction(ElasticsearchConfig esConfig, ReflowConfig reflowConfig,
-                                        Class<T> documentClass) {
+    public ReflowDocumentFetchFunction(ElasticsearchConfig esConfig, ReflowConfig reflowConfig) {
         this.esConfig = esConfig;
         this.reflowConfig = reflowConfig;
-        this.documentClass = documentClass;
     }
 
     @Override
-    public void open(Configuration parameters) throws Exception {
-        super.open(parameters);
+    public void open(OpenContext openContext) throws Exception {
+        super.open(openContext);
         esService = new ElasticsearchService(esConfig);
 
         sliceState = getRuntimeContext().getState(
@@ -88,36 +77,25 @@ public class ReflowDocumentFetchFunction<T>
                 new ValueStateDescriptor<>("fetchedCount", Types.LONG));
     }
 
-    /**
-     * Called when a new {@link ReflowSlice} arrives.  Initialises state and kicks off
-     * the first batch fetch.
-     */
     @Override
-    public void processElement(ReflowSlice slice, Context ctx, Collector<RawDocument<T>> out)
+    public void processElement(ReflowSlice slice, Context ctx, Collector<RawDocument> out)
             throws Exception {
 
         log.info("Starting stateful fetch for {}", slice);
 
-        // Initialise state for the new slice
         sliceState.update(slice);
         searchAfterState.clear();
         fetchedCountState.update(0L);
 
-        // Fetch the first batch immediately (synchronous)
         fetchNextBatch(out, ctx.timerService());
     }
 
-    /**
-     * Timer callback — fetches the next batch using the cursor persisted in state.
-     * If Flink recovered from a checkpoint, this is where fetching resumes automatically.
-     */
     @Override
-    public void onTimer(long timestamp, OnTimerContext ctx, Collector<RawDocument<T>> out)
+    public void onTimer(long timestamp, OnTimerContext ctx, Collector<RawDocument> out)
             throws Exception {
 
         ReflowSlice slice = sliceState.value();
         if (slice == null) {
-            // State was already cleared (slice completed or cleaned up)
             return;
         }
         fetchNextBatch(out, ctx.timerService());
@@ -125,7 +103,7 @@ public class ReflowDocumentFetchFunction<T>
 
     // ------------------------------ internal ---------------------------------
 
-    private void fetchNextBatch(Collector<RawDocument<T>> out, TimerService timerService)
+    private void fetchNextBatch(Collector<RawDocument> out, TimerService timerService)
             throws Exception {
 
         ReflowSlice slice = sliceState.value();
@@ -133,43 +111,33 @@ public class ReflowDocumentFetchFunction<T>
             return;
         }
 
-        // Read the current search_after cursor from state
         List<String> cursor = readSearchAfterCursor();
 
-        // Synchronous ES fetch — one batch at a time for checkpoint safety
-        FetchBatchResult<T> result = esService.fetchBatch(
-                slice, reflowConfig.getFetchBatchSize(), cursor, documentClass);
+        FetchBatchResult result = esService.fetchBatch(
+                slice, reflowConfig.getFetchBatchSize(), cursor, reflowConfig.getSortField());
 
-        // Emit documents downstream
-        for (RawDocument<T> doc : result.getDocuments()) {
+        for (RawDocument doc : result.getDocuments()) {
             out.collect(doc);
         }
 
-        // Update running total
         long totalFetched = (fetchedCountState.value() != null ? fetchedCountState.value() : 0L)
                 + result.getDocuments().size();
         fetchedCountState.update(totalFetched);
 
         if (result.hasMore()) {
-            // Persist the new cursor — this will be part of the next checkpoint
             persistSearchAfterCursor(result.getNextSearchAfter());
 
             log.debug("Fetched batch of {} docs (total: {}) for {}, scheduling next batch",
                     result.getDocuments().size(), totalFetched, slice);
 
-            // Schedule the next batch via a processing-time timer.
-            // Between now and that timer fire, Flink may take a checkpoint — which is
-            // the entire point: the checkpoint will include the updated cursor.
             timerService.registerProcessingTimeTimer(
                     timerService.currentProcessingTime() + 1);
         } else {
-            // All pages consumed — clean up keyed state
             log.info("Completed fetch for {}. Total documents: {}", slice, totalFetched);
             clearState();
         }
     }
 
-    /** Reads the search_after cursor from {@link ListState}, or returns {@code null} for page 1. */
     private List<String> readSearchAfterCursor() throws Exception {
         List<String> cursor = new ArrayList<>();
         for (String val : searchAfterState.get()) {
@@ -178,7 +146,6 @@ public class ReflowDocumentFetchFunction<T>
         return cursor.isEmpty() ? null : cursor;
     }
 
-    /** Overwrites the search_after cursor in state with the values from the latest batch. */
     private void persistSearchAfterCursor(List<String> cursorValues) throws Exception {
         searchAfterState.clear();
         for (String val : cursorValues) {
@@ -186,7 +153,6 @@ public class ReflowDocumentFetchFunction<T>
         }
     }
 
-    /** Clears all keyed state for this slice key — called when fetching is complete. */
     private void clearState() {
         sliceState.clear();
         searchAfterState.clear();

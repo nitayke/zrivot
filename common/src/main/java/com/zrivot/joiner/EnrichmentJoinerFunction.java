@@ -2,13 +2,13 @@ package com.zrivot.joiner;
 
 import com.zrivot.model.EnrichedDocument;
 import com.zrivot.model.EnrichmentResult;
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.api.common.state.MapState;
 import org.apache.flink.api.common.state.MapStateDescriptor;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.common.typeinfo.Types;
-import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
 
@@ -53,8 +53,8 @@ public class EnrichmentJoinerFunction
      */
     private transient MapState<String, Map<String, Object>> enrichmentState;
 
-    /** Stores the original payload (typed domain object) from the first result that arrives. */
-    private transient ValueState<Object> originalPayloadState;
+    /** Stores the original payload from the first result that arrives. */
+    private transient ValueState<Map<String, Object>> originalPayloadState;
 
     /** Stores existing enrichments (from ES) when processing reflow documents. */
     private transient ValueState<Map<String, Map<String, Object>>> existingEnrichmentsState;
@@ -74,14 +74,14 @@ public class EnrichmentJoinerFunction
     }
 
     @Override
-    public void open(Configuration parameters) throws Exception {
-        super.open(parameters);
+    public void open(OpenContext openContext) throws Exception {
+        super.open(openContext);
 
         enrichmentState = getRuntimeContext().getMapState(
                 new MapStateDescriptor<>("enrichments", Types.STRING, Types.MAP(Types.STRING, Types.GENERIC(Object.class)))
         );
         originalPayloadState = getRuntimeContext().getState(
-                new ValueStateDescriptor<>("originalPayload", Types.GENERIC(Object.class))
+                new ValueStateDescriptor<>("originalPayload", Types.MAP(Types.STRING, Types.GENERIC(Object.class)))
         );
         existingEnrichmentsState = getRuntimeContext().getState(
                 new ValueStateDescriptor<>("existingEnrichments",
@@ -175,11 +175,11 @@ public class EnrichmentJoinerFunction
             // If failure and existing enrichment present, the existing one is preserved
         }
 
-        Object originalPayload = originalPayloadState.value();
+        Map<String, Object> originalPayload = originalPayloadState.value();
 
         EnrichedDocument doc = new EnrichedDocument(
                 documentId,
-                originalPayload,
+                originalPayload != null ? originalPayload : new HashMap<>(),
                 mergedEnrichments,
                 System.currentTimeMillis()
         );

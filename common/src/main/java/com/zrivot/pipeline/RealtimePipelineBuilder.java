@@ -4,6 +4,7 @@ import com.zrivot.config.EnricherConfig;
 import com.zrivot.config.PipelineConfig;
 import com.zrivot.enrichment.AsyncEnrichmentFunction;
 import com.zrivot.enrichment.BoomerangEnrichmentFunction;
+import com.zrivot.enrichment.BulkEnrichmentFunction;
 import com.zrivot.kafka.KafkaSourceFactory;
 import com.zrivot.model.EnrichmentResult;
 import com.zrivot.model.RawDocument;
@@ -23,11 +24,10 @@ import java.util.concurrent.TimeUnit;
  *   [Raw Kafka Topic]
  *       → keyBy(documentId)
  *       → BoomerangEnrichmentFunction  (keyed state guard — only when reflowEnabled)
- *       → AsyncDataStream              (non-blocking API enrichment)
+ *       → AsyncDataStream.orderedWait  (non-blocking API enrichment, preserves order)
+ *         OR
+ *       → BulkEnrichmentFunction       (buffered batch enrichment for bulk-capable APIs)
  * </pre>
- *
- * <p>Each enricher reads from the same raw topic but uses its own consumer group,
- * so they can lag independently without affecting each other.</p>
  */
 @Slf4j
 public class RealtimePipelineBuilder {
@@ -35,16 +35,13 @@ public class RealtimePipelineBuilder {
     private final StreamExecutionEnvironment env;
     private final PipelineConfig config;
     private final KafkaSourceFactory kafkaSourceFactory;
-    private final Class<?> documentClass;
 
     public RealtimePipelineBuilder(StreamExecutionEnvironment env,
                                    PipelineConfig config,
-                                   KafkaSourceFactory kafkaSourceFactory,
-                                   Class<?> documentClass) {
+                                   KafkaSourceFactory kafkaSourceFactory) {
         this.env = env;
         this.config = config;
         this.kafkaSourceFactory = kafkaSourceFactory;
-        this.documentClass = documentClass;
     }
 
     /**
@@ -58,18 +55,17 @@ public class RealtimePipelineBuilder {
         // Read raw documents from Kafka with the enricher's own consumer group
         var rawSource = kafkaSourceFactory.createRawSource(
                 config.getRawTopic(),
-                enricherConfig.getConsumerGroup(),
-                documentClass
+                enricherConfig.getConsumerGroup()
         );
 
-        DataStream<RawDocument<?>> rawDocs = env
+        DataStream<RawDocument> rawDocs = env
                 .fromSource(rawSource, WatermarkStrategy.noWatermarks(),
                         "realtime-source-" + enricherName);
 
-        // Determine input stream for async enrichment:
+        // Determine input stream for enrichment:
         // - With reflow: apply boomerang guard (keyed state filters stale events)
         // - Without reflow: no guard needed — pass raw docs straight through
-        DataStream<RawDocument<?>> enricherInput;
+        DataStream<RawDocument> enricherInput;
         if (enricherConfig.isReflowEnabled()) {
             enricherInput = rawDocs
                     .keyBy(RawDocument::getDocumentId)
@@ -79,13 +75,27 @@ public class RealtimePipelineBuilder {
             enricherInput = rawDocs;
         }
 
-        // Async enrichment — non-blocking API calls via AsyncDataStream
-        return AsyncDataStream.unorderedWait(
-                enricherInput,
-                new AsyncEnrichmentFunction(enricherConfig),
-                enricherConfig.getAsyncTimeoutMs(),
-                TimeUnit.MILLISECONDS,
-                enricherConfig.getAsyncCapacity()
-        ).name("realtime-async-enrich-" + enricherName);
+        // Choose enrichment path: bulk or single-document async
+        if (enricherConfig.isBulkEnabled()) {
+            return enricherInput
+                    .keyBy(doc -> "bulk")
+                    .process(new BulkEnrichmentFunction(
+                            enricherConfig,
+                            config.getElasticsearch(),
+                            config.getElasticsearch().getIndex()))
+                    .name("realtime-bulk-enrich-" + enricherName);
+        } else {
+            // Async enrichment with orderedWait to preserve message ordering
+            return AsyncDataStream.orderedWait(
+                    enricherInput,
+                    new AsyncEnrichmentFunction(
+                            enricherConfig,
+                            config.getElasticsearch(),
+                            config.getElasticsearch().getIndex()),
+                    enricherConfig.getAsyncTimeoutMs(),
+                    TimeUnit.MILLISECONDS,
+                    enricherConfig.getAsyncCapacity()
+            ).name("realtime-async-enrich-" + enricherName);
+        }
     }
 }

@@ -4,7 +4,6 @@ import com.zrivot.config.ElasticsearchConfig;
 import com.zrivot.model.RawDocument;
 import com.zrivot.model.ReflowSlice;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
-import co.elastic.clients.elasticsearch._types.SlicedScroll;
 import co.elastic.clients.elasticsearch.core.CountRequest;
 import co.elastic.clients.elasticsearch.core.CountResponse;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
@@ -21,6 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.elasticsearch.client.RestClient;
 import org.elasticsearch.client.RestClientBuilder;
 
+import java.io.ByteArrayInputStream;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.Serializable;
@@ -35,11 +35,12 @@ import java.util.Map;
  * <p>Responsible for:
  * <ul>
  *   <li>Counting documents matching a query (to decide whether to slice)</li>
- *   <li>Fetching documents in batches, with optional slice support</li>
+ *   <li>Fetching documents in batches using search_after, with configurable sort</li>
+ *   <li>Re-fetching individual documents by ID (for retry after enrichment failure)</li>
  * </ul>
  *
  * <p>Instances are created per-operator and are NOT serialisable across Flink checkpoints;
- * they should be initialised inside {@code open()} methods.
+ * they should be initialised inside {@code open()} methods.</p>
  */
 @Slf4j
 public class ElasticsearchService implements Closeable {
@@ -75,10 +76,10 @@ public class ElasticsearchService implements Closeable {
      * Counts how many documents in the given index match the provided query criteria.
      */
     public long countDocuments(String index, Map<String, Object> queryCriteria) throws IOException {
+        byte[] queryBytes = objectMapper.writeValueAsBytes(queryCriteria);
+
         CountRequest.Builder countBuilder = new CountRequest.Builder().index(index);
-        countBuilder.query(q -> q.withJson(
-                new java.io.ByteArrayInputStream(objectMapper.writeValueAsBytes(queryCriteria))
-        ));
+        countBuilder.query(q -> q.withJson(new ByteArrayInputStream(queryBytes)));
 
         CountResponse response = client.count(countBuilder.build());
         long count = response.count();
@@ -90,37 +91,34 @@ public class ElasticsearchService implements Closeable {
      * Fetches a <b>single batch</b> of documents from Elasticsearch using {@code search_after}
      * pagination.
      *
-     * <p>This is the building-block for checkpoint-recoverable fetching: the caller (Flink
-     * operator) stores the returned {@code nextSearchAfter} cursor in keyed state, so that after
-     * a crash the operator can resume from the last checkpointed position instead of re-fetching
-     * everything from scratch.</p>
+     * <p>Supports a configurable sort field: when {@code sortField} is non-null, documents
+     * are sorted by that field descending (newest first), then by {@code _id}.  When null,
+     * documents are sorted by {@code _id} only.</p>
      *
-     * <p>Uses the <b>synchronous</b> ES client intentionally — each batch must complete and its
-     * cursor must be persisted to Flink state before moving to the next batch.  An asynchronous
-     * fetch would make it impossible to guarantee the cursor is checkpointed between batches.</p>
-     *
-     * @param slice         the slice to query
-     * @param batchSize     max documents per batch
-     * @param searchAfter   the cursor from the previous batch, or {@code null} for the first page
-     * @param documentClass the domain document class for typed deserialization
-     * @param <T>           the domain document type
+     * @param slice       the slice to query
+     * @param batchSize   max documents per batch
+     * @param searchAfter the cursor from the previous batch, or {@code null} for the first page
+     * @param sortField   optional time field (e.g. "startTime") for descending sort; null for _id only
      * @return batch result containing documents and the cursor for the next page (null if done)
      */
     @SuppressWarnings("unchecked")
-    public <T> FetchBatchResult<T> fetchBatch(ReflowSlice slice, int batchSize,
-                                              List<String> searchAfter,
-                                              Class<T> documentClass) throws IOException {
+    public FetchBatchResult fetchBatch(ReflowSlice slice, int batchSize,
+                                       List<String> searchAfter,
+                                       String sortField) throws IOException {
 
         SearchRequest.Builder searchBuilder = new SearchRequest.Builder()
                 .index(slice.getIndex())
-                .size(batchSize)
-                .sort(s -> s.field(f -> f.field("_id")));
+                .size(batchSize);
 
-        // Apply the query
-        searchBuilder.query(q -> q.withJson(
-                new java.io.ByteArrayInputStream(
-                        objectMapper.writeValueAsBytes(slice.getQuery()))
-        ));
+        // Sort: optional time field DESC, then _id ASC
+        if (sortField != null && !sortField.isBlank()) {
+            searchBuilder.sort(s -> s.field(f -> f.field(sortField).order(co.elastic.clients.elasticsearch._types.SortOrder.Desc)));
+        }
+        searchBuilder.sort(s -> s.field(f -> f.field("_id").order(co.elastic.clients.elasticsearch._types.SortOrder.Asc)));
+
+        // Apply the query — serialize outside lambda to avoid checked exception in lambda
+        byte[] queryBytes = objectMapper.writeValueAsBytes(slice.getQuery());
+        searchBuilder.query(q -> q.withJson(new ByteArrayInputStream(queryBytes)));
 
         // Apply slicing if needed
         if (slice.isSliced()) {
@@ -136,18 +134,16 @@ public class ElasticsearchService implements Closeable {
                     .toList());
         }
 
-        // Read as Map to extract pipeline metadata, then convert payload to typed object
         SearchResponse<Map> response = client.search(searchBuilder.build(), Map.class);
         List<Hit<Map>> hits = response.hits().hits();
 
-        List<RawDocument<T>> documents = new ArrayList<>();
+        List<RawDocument> documents = new ArrayList<>();
         for (Hit<Map> hit : hits) {
             Map<String, Object> source = hit.source();
             if (source != null) {
-                T typedPayload = objectMapper.convertValue(source, documentClass);
-                documents.add(RawDocument.<T>builder()
+                documents.add(RawDocument.builder()
                         .documentId(hit.id())
-                        .payload(typedPayload)
+                        .payload(source)
                         .boomerangUpdateCount(extractUpdateCount(source))
                         .reflow(true)
                         .existingEnrichments(extractEnrichments(source))
@@ -166,21 +162,20 @@ public class ElasticsearchService implements Closeable {
             }
         }
 
-        return new FetchBatchResult<>(documents, nextSearchAfter);
+        return new FetchBatchResult(documents, nextSearchAfter);
     }
 
     /**
      * Convenience method that fetches <b>all</b> documents matching a slice by repeatedly
-     * calling {@link #fetchBatch}.  Useful for tests or non-Flink callers that do not need
-     * checkpoint recovery.
+     * calling {@link #fetchBatch}.
      */
-    public <T> List<RawDocument<T>> fetchDocuments(ReflowSlice slice, int batchSize,
-                                                   Class<T> documentClass) throws IOException {
-        List<RawDocument<T>> results = new ArrayList<>();
+    public List<RawDocument> fetchDocuments(ReflowSlice slice, int batchSize,
+                                            String sortField) throws IOException {
+        List<RawDocument> results = new ArrayList<>();
         List<String> searchAfter = null;
 
         while (true) {
-            FetchBatchResult<T> batch = fetchBatch(slice, batchSize, searchAfter, documentClass);
+            FetchBatchResult batch = fetchBatch(slice, batchSize, searchAfter, sortField);
             results.addAll(batch.getDocuments());
 
             if (!batch.hasMore()) {
@@ -191,6 +186,45 @@ public class ElasticsearchService implements Closeable {
 
         log.info("Fetched {} documents for slice {}", results.size(), slice);
         return results;
+    }
+
+    /**
+     * Re-fetches documents by their IDs from Elasticsearch.
+     * Used for retry-with-refetch when enrichment fails on reflow documents.
+     *
+     * @param index       the ES index
+     * @param documentIds list of document IDs to fetch
+     * @return list of RawDocuments with fresh data from ES
+     */
+    @SuppressWarnings("unchecked")
+    public List<RawDocument> fetchByIds(String index, List<String> documentIds) throws IOException {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        SearchRequest request = SearchRequest.of(s -> s
+                .index(index)
+                .size(documentIds.size())
+                .query(q -> q.ids(i -> i.values(documentIds)))
+        );
+
+        SearchResponse<Map> response = client.search(request, Map.class);
+        List<RawDocument> documents = new ArrayList<>();
+
+        for (Hit<Map> hit : response.hits().hits()) {
+            Map<String, Object> source = hit.source();
+            if (source != null) {
+                documents.add(RawDocument.builder()
+                        .documentId(hit.id())
+                        .payload(source)
+                        .boomerangUpdateCount(extractUpdateCount(source))
+                        .reflow(true)
+                        .existingEnrichments(extractEnrichments(source))
+                        .build());
+            }
+        }
+
+        return documents;
     }
 
     @SuppressWarnings("unchecked")

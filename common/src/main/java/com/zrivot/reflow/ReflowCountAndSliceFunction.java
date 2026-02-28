@@ -1,15 +1,19 @@
 package com.zrivot.reflow;
 
 import com.zrivot.config.ElasticsearchConfig;
+import com.zrivot.config.EnricherConfig;
 import com.zrivot.config.ReflowConfig;
 import com.zrivot.elasticsearch.ElasticsearchService;
+import com.zrivot.enrichment.Enricher;
+import com.zrivot.enrichment.EnricherFactory;
 import com.zrivot.model.ReflowMessage;
 import com.zrivot.model.ReflowSlice;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.flink.configuration.Configuration;
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.streaming.api.functions.ProcessFunction;
 import org.apache.flink.util.Collector;
 
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -17,48 +21,55 @@ import java.util.UUID;
  *
  * <p>Logic:
  * <ol>
- *   <li>Translates the reflow message query criteria into an ES count query.</li>
+ *   <li>Uses the enricher's {@link Enricher#buildReflowQuery} to translate the reflow
+ *       message criteria into an Elasticsearch query.</li>
+ *   <li>Counts matching documents.</li>
  *   <li>If the count exceeds {@code sliceThreshold}, splits into multiple slices.</li>
  *   <li>Otherwise, emits a single unsliced query.</li>
  * </ol>
- *
- * <p>This operator opens and closes its own {@link ElasticsearchService} connection.</p>
  */
 @Slf4j
 public class ReflowCountAndSliceFunction extends ProcessFunction<ReflowMessage, ReflowSlice> {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 2L;
 
     private final ElasticsearchConfig esConfig;
     private final ReflowConfig reflowConfig;
+    private final EnricherConfig enricherConfig;
     private final String index;
 
     private transient ElasticsearchService esService;
+    private transient Enricher enricher;
 
     public ReflowCountAndSliceFunction(ElasticsearchConfig esConfig,
                                        ReflowConfig reflowConfig,
+                                       EnricherConfig enricherConfig,
                                        String index) {
         this.esConfig = esConfig;
         this.reflowConfig = reflowConfig;
+        this.enricherConfig = enricherConfig;
         this.index = index;
     }
 
     @Override
-    public void open(Configuration parameters) throws Exception {
-        super.open(parameters);
+    public void open(OpenContext openContext) throws Exception {
+        super.open(openContext);
         esService = new ElasticsearchService(esConfig);
+        enricher = EnricherFactory.create(enricherConfig);
     }
 
     @Override
     public void processElement(ReflowMessage message, Context ctx, Collector<ReflowSlice> out)
             throws Exception {
 
-        var query = message.getQueryCriteria();
         String enricherName = message.getEnricherName();
         String requestId = UUID.randomUUID().toString();
 
+        // Map reflow criteria to ES query using the enricher's per-topic mapper
+        Map<String, Object> esQuery = enricher.buildReflowQuery(message.getQueryCriteria());
+
         try {
-            long count = esService.countDocuments(index, query);
+            long count = esService.countDocuments(index, esQuery);
             log.info("Reflow count for enricher={} request={}: {} documents",
                     enricherName, requestId, count);
 
@@ -68,7 +79,6 @@ public class ReflowCountAndSliceFunction extends ProcessFunction<ReflowMessage, 
             }
 
             if (count > reflowConfig.getSliceThreshold()) {
-                // Split into slices for parallel processing
                 int numSlices = Math.min(
                         reflowConfig.getMaxSlices(),
                         (int) Math.ceil((double) count / reflowConfig.getSliceThreshold())
@@ -77,16 +87,14 @@ public class ReflowCountAndSliceFunction extends ProcessFunction<ReflowMessage, 
                         numSlices, enricherName, requestId);
 
                 for (int i = 0; i < numSlices; i++) {
-                    out.collect(new ReflowSlice(requestId, enricherName, query, i, numSlices, index));
+                    out.collect(new ReflowSlice(requestId, enricherName, esQuery, i, numSlices, index));
                 }
             } else {
-                // Small enough to handle as a single slice
-                out.collect(ReflowSlice.unsliced(requestId, enricherName, query, index));
+                out.collect(ReflowSlice.unsliced(requestId, enricherName, esQuery, index));
             }
         } catch (Exception e) {
             log.error("Failed to count documents for reflow enricher={}: {}",
                     enricherName, e.getMessage(), e);
-            // Re-throw to let Flink retry (the reflow message will be re-consumed from Kafka)
             throw e;
         }
     }
@@ -95,6 +103,9 @@ public class ReflowCountAndSliceFunction extends ProcessFunction<ReflowMessage, 
     public void close() throws Exception {
         if (esService != null) {
             esService.close();
+        }
+        if (enricher != null) {
+            enricher.close();
         }
         super.close();
     }

@@ -10,9 +10,8 @@ import java.util.Map;
  * Result produced by a single enricher for a specific document.
  * Contains either enriched fields (on success) or error details (on failure).
  *
- * <p>The {@code originalPayload} is the typed domain object (e.g. PurchaseDocument)
- * carried as {@code Object} so that this class stays non-generic and can be used
- * in a single union stream across all enrichers.</p>
+ * <p>The {@code originalPayload} is the raw document payload carried as a
+ * {@code Map<String, Object>} through the pipeline.</p>
  */
 @Data
 @NoArgsConstructor
@@ -23,7 +22,7 @@ public class EnrichmentResult implements Serializable {
     private String documentId;
     private String enricherName;
     private Map<String, Object> enrichedFields;
-    private Object originalPayload;
+    private Map<String, Object> originalPayload;
     private long boomerangUpdateCount;
     private boolean success;
     private String errorMessage;
@@ -33,7 +32,7 @@ public class EnrichmentResult implements Serializable {
 
     public static EnrichmentResult success(String documentId, String enricherName,
                                            Map<String, Object> enrichedFields,
-                                           Object originalPayload,
+                                           Map<String, Object> originalPayload,
                                            long boomerangUpdateCount,
                                            boolean reflow,
                                            Map<String, Map<String, Object>> existingEnrichments) {
@@ -52,7 +51,7 @@ public class EnrichmentResult implements Serializable {
 
     public static EnrichmentResult failure(String documentId, String enricherName,
                                            String errorMessage,
-                                           Object originalPayload,
+                                           Map<String, Object> originalPayload,
                                            long boomerangUpdateCount,
                                            boolean reflow,
                                            Map<String, Map<String, Object>> existingEnrichments) {

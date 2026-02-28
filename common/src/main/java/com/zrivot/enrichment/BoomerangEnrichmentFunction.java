@@ -3,10 +3,10 @@ package com.zrivot.enrichment;
 import com.zrivot.config.EnricherConfig;
 import com.zrivot.model.RawDocument;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.common.typeinfo.Types;
-import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
 
@@ -26,9 +26,9 @@ import org.apache.flink.util.Collector;
  */
 @Slf4j
 public class BoomerangEnrichmentFunction
-        extends KeyedProcessFunction<String, RawDocument<?>, RawDocument<?>> {
+        extends KeyedProcessFunction<String, RawDocument, RawDocument> {
 
-    private static final long serialVersionUID = 3L;
+    private static final long serialVersionUID = 4L;
 
     private final EnricherConfig enricherConfig;
 
@@ -39,8 +39,8 @@ public class BoomerangEnrichmentFunction
     }
 
     @Override
-    public void open(Configuration parameters) throws Exception {
-        super.open(parameters);
+    public void open(OpenContext openContext) throws Exception {
+        super.open(openContext);
 
         ValueStateDescriptor<Long> descriptor = new ValueStateDescriptor<>(
                 "boomerangUpdateCount-" + enricherConfig.getName(),
@@ -50,7 +50,7 @@ public class BoomerangEnrichmentFunction
     }
 
     @Override
-    public void processElement(RawDocument<?> doc, Context ctx, Collector<RawDocument<?>> out)
+    public void processElement(RawDocument doc, Context ctx, Collector<RawDocument> out)
             throws Exception {
 
         String documentId = doc.getDocumentId();

@@ -37,6 +37,18 @@ public class EnricherConfig implements Serializable {
     /** Max number of in-flight async enrichment calls per operator (default: 100). */
     private int asyncCapacity = 100;
 
+    /** Whether this enricher accepts bulk (batch) API requests. */
+    private boolean bulkEnabled = false;
+
+    /** Number of documents per bulk request (used when {@code bulkEnabled} is true). */
+    private int bulkSize = 10;
+
+    /** Delay in ms before retrying a failed enrichment (reflow only, re-fetches from ES). */
+    private long retryDelayMs = 5_000;
+
+    /** Maximum number of retries after enrichment failure (reflow only). */
+    private int maxRetries = 3;
+
     public String getProperty(String key) {
         return properties.get(key);
     }

@@ -62,10 +62,21 @@ public class PipelineOrchestrator {
     public void build(StreamExecutionEnvironment env) {
         List<EnricherConfig> enrichers = config.getEnrichers();
         PipelineMode mode = config.getMode();
-        Class<?> documentClass = config.getDocumentClass();
 
-        log.info("Building pipeline in {} mode with {} enrichers, document type: {}",
-                mode, enrichers.size(), documentClass.getSimpleName());
+        log.info("Building pipeline in {} mode with {} enrichers", mode, enrichers.size());
+
+        // Validate consumer groups — required only in REALTIME mode
+        if (mode == PipelineMode.REALTIME) {
+            for (EnricherConfig ec : enrichers) {
+                if (ec.getConsumerGroup() == null || ec.getConsumerGroup().isBlank()) {
+                    throw new IllegalStateException(
+                            "consumerGroup is required for enricher '" + ec.getName()
+                                    + "' in REALTIME mode");
+                }
+            }
+        } else {
+            log.info("OFFLINE mode — consumer groups for the realtime data topic are not required");
+        }
 
         Set<String> enricherNames = enrichers.stream()
                 .map(EnricherConfig::getName)
@@ -76,10 +87,9 @@ public class PipelineOrchestrator {
                 .map(EnricherConfig::getName)
                 .collect(Collectors.toSet());
 
-        RealtimePipelineBuilder realtimeBuilder = new RealtimePipelineBuilder(
-                env, config, kafkaSourceFactory, documentClass);
-        ReflowPipelineBuilder reflowBuilder = new ReflowPipelineBuilder(
-                env, config, kafkaSourceFactory, documentClass);
+        RealtimePipelineBuilder realtimeBuilder = (mode == PipelineMode.REALTIME)
+                ? new RealtimePipelineBuilder(env, config, kafkaSourceFactory) : null;
+        ReflowPipelineBuilder reflowBuilder = new ReflowPipelineBuilder(env, config, kafkaSourceFactory);
 
         List<DataStream<EnrichmentResult>> allResultStreams = new ArrayList<>();
 
