@@ -69,7 +69,6 @@ public class AsyncBulkEnrichmentFunction
     private final EnricherConfig enricherConfig;
     private final ElasticsearchConfig esConfig;
     private final String esIndex;
-    private final int maxConcurrentApiRequests;
 
     private transient Enricher enricher;
     private transient ElasticsearchService esService;
@@ -84,12 +83,10 @@ public class AsyncBulkEnrichmentFunction
 
     public AsyncBulkEnrichmentFunction(EnricherConfig enricherConfig,
                                        ElasticsearchConfig esConfig,
-                                       String esIndex,
-                                       int maxConcurrentApiRequests) {
+                                       String esIndex) {
         this.enricherConfig = enricherConfig;
         this.esConfig = esConfig;
         this.esIndex = esIndex;
-        this.maxConcurrentApiRequests = maxConcurrentApiRequests;
     }
 
     @Override

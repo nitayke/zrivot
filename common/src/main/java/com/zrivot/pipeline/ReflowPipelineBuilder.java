@@ -89,8 +89,6 @@ public class ReflowPipelineBuilder {
                 .process(new BoomerangEnrichmentFunction(enricherConfig))
                 .name("reflow-guard-" + enricherName);
 
-        int maxConcurrent = config.getMaxConcurrentApiRequests();
-
         // 5. Async enrichment — orderedWait for both bulk and single paths
         if (enricherConfig.isBulkEnabled()) {
             return AsyncDataStream.orderedWait(
@@ -98,8 +96,7 @@ public class ReflowPipelineBuilder {
                     new AsyncBulkEnrichmentFunction(
                             enricherConfig,
                             config.getElasticsearch(),
-                            config.getElasticsearch().getIndex(),
-                            maxConcurrent),
+                            config.getElasticsearch().getIndex()),
                     enricherConfig.getAsyncTimeoutMs(),
                     TimeUnit.MILLISECONDS,
                     enricherConfig.getAsyncCapacity()
@@ -110,8 +107,7 @@ public class ReflowPipelineBuilder {
                     new AsyncEnrichmentFunction(
                             enricherConfig,
                             config.getElasticsearch(),
-                            config.getElasticsearch().getIndex(),
-                            maxConcurrent),
+                            config.getElasticsearch().getIndex()),
                     enricherConfig.getAsyncTimeoutMs(),
                     TimeUnit.MILLISECONDS,
                     enricherConfig.getAsyncCapacity()

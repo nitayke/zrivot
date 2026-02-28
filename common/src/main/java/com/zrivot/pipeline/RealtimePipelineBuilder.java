@@ -82,8 +82,6 @@ public class RealtimePipelineBuilder {
             enricherInput = rawDocs;
         }
 
-        int maxConcurrent = config.getMaxConcurrentApiRequests();
-
         // Both bulk and single paths use AsyncDataStream.orderedWait — no keyBy("bulk")
         if (enricherConfig.isBulkEnabled()) {
             return AsyncDataStream.orderedWait(
@@ -91,8 +89,7 @@ public class RealtimePipelineBuilder {
                     new AsyncBulkEnrichmentFunction(
                             enricherConfig,
                             config.getElasticsearch(),
-                            config.getElasticsearch().getIndex(),
-                            maxConcurrent),
+                            config.getElasticsearch().getIndex()),
                     enricherConfig.getAsyncTimeoutMs(),
                     TimeUnit.MILLISECONDS,
                     enricherConfig.getAsyncCapacity()
@@ -104,8 +101,7 @@ public class RealtimePipelineBuilder {
                     new AsyncEnrichmentFunction(
                             enricherConfig,
                             config.getElasticsearch(),
-                            config.getElasticsearch().getIndex(),
-                            maxConcurrent),
+                            config.getElasticsearch().getIndex()),
                     enricherConfig.getAsyncTimeoutMs(),
                     TimeUnit.MILLISECONDS,
                     enricherConfig.getAsyncCapacity()

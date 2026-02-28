@@ -41,7 +41,6 @@ public class AsyncEnrichmentFunction extends RichAsyncFunction<RawDocument, Enri
     private final EnricherConfig enricherConfig;
     private final ElasticsearchConfig esConfig;
     private final String esIndex;
-    private final int maxConcurrentApiRequests;
 
     private transient Enricher enricher;
     private transient ElasticsearchService esService;
@@ -49,12 +48,10 @@ public class AsyncEnrichmentFunction extends RichAsyncFunction<RawDocument, Enri
 
     public AsyncEnrichmentFunction(EnricherConfig enricherConfig,
                                    ElasticsearchConfig esConfig,
-                                   String esIndex,
-                                   int maxConcurrentApiRequests) {
+                                   String esIndex) {
         this.enricherConfig = enricherConfig;
         this.esConfig = esConfig;
         this.esIndex = esIndex;
-        this.maxConcurrentApiRequests = maxConcurrentApiRequests;
     }
 
     @Override
