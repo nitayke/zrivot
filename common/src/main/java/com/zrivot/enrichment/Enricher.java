@@ -25,80 +25,54 @@ import java.util.concurrent.ExecutorService;
  * <p>Each enricher that participates in reflow should override
  * {@link #buildReflowQuery(Map)} to convert the domain-level reflow criteria
  * (from the Kafka reflow topic) into an Elasticsearch query.</p>
+
+import com.zrivot.config.EnricherConfig;
+import java.io.Serializable;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+
+/**
+ * Contract for all enrichment implementations.
  *
- * <h3>Bulk support</h3>
- * <p>Enrichers that call APIs accepting multiple documents per request should override
- * {@link #supportsBulk()} and {@link #enrichBulkAsync(List, List)}.</p>
+ * <p>Enrichers are composed from pluggable mapping strategies for:
+ * <ul>
+ *   <li>Elasticsearch query mapping</li>
+ *   <li>API request mapping</li>
+ *   <li>API response mapping</li>
+ *   <li>Field name abstraction (DB field mapping)</li>
+ * </ul>
+ * Each mapping strategy can be implemented in a separate class for complex logic.</p>
  */
 public interface Enricher extends Serializable {
 
-    /**
-     * Initialises the enricher with its configuration.
-     * Called once when the Flink operator opens.
-     */
+    /** Initialises the enricher with its configuration. */
     void init(EnricherConfig config);
 
-    // ── Mapping hooks ────────────────────────────────────────────────────
+    /** Returns the Elasticsearch query mapper for reflow logic. */
+    QueryMapper getQueryMapper();
 
-    /**
-     * Transforms the raw document payload into the body to send to the enrichment API.
-     * Override to select/reshape fields for the external service.
-     *
-     * @param documentId the unique document identifier
-     * @param payload    the raw document payload map
-     * @return the request body (default: payload as-is)
-     */
-    default Map<String, Object> mapToRequest(String documentId, Map<String, Object> payload) {
-        return payload;
-    }
+    /** Returns the API request mapper. */
+    ApiRequestMapper getApiRequestMapper();
 
-    /**
-     * Interprets the enrichment API response and returns the fields to merge back.
-     * Override to rename/filter/transform response fields.
-     *
-     * @param documentId  the unique document identifier
-     * @param payload     the original raw document payload
-     * @param apiResponse the full API response parsed as a map
-     * @return enriched fields to merge into the document (default: apiResponse as-is)
-     */
-    default Map<String, Object> mapFromResponse(String documentId,
-                                                 Map<String, Object> payload,
-                                                 Map<String, Object> apiResponse) {
-        return apiResponse;
-    }
+    /** Returns the API response mapper. */
+    ApiResponseMapper getApiResponseMapper();
 
-    /**
-     * Converts domain-level reflow criteria (from the Kafka reflow message) into an
-     * Elasticsearch query.  Each enricher typically has its own mapping logic.
-     *
-     * <p>Override this per enricher to translate domain events (e.g. "geo data changed for
-     * region X") into the appropriate ES query that selects affected documents.</p>
-     *
-     * @param reflowCriteria the raw criteria from the reflow Kafka message
-     * @return an Elasticsearch query body as a map (default: reflowCriteria as-is)
-     */
-    default Map<String, Object> buildReflowQuery(Map<String, Object> reflowCriteria) {
-        return reflowCriteria;
-    }
+    /** Returns the field mapping abstraction for DB field names. */
+    FieldMapper getFieldMapper();
 
     // ── Single-document enrichment ───────────────────────────────────────
 
     /**
      * Enriches the given document synchronously.
-     *
-     * <p>The default implementation of the async variants delegates to this method.</p>
-     *
-     * @param documentId the unique document identifier
-     * @param payload    the document payload map
-     * @return a map of new enriched fields to merge into the document
+     * Implementations should use the mapping strategies above.
      */
     Map<String, Object> enrich(String documentId, Map<String, Object> payload) throws Exception;
 
     /**
      * Async single-document enrichment.  Implementations that perform I/O should
      * override this to use non-blocking clients.
-     *
-     * <p>Default delegates to the sync {@link #enrich} on the common ForkJoinPool.</p>
      */
     default CompletableFuture<Map<String, Object>> enrichAsync(String documentId,
                                                                 Map<String, Object> payload) {
@@ -113,32 +87,15 @@ public interface Enricher extends Serializable {
 
     // ── Bulk enrichment ──────────────────────────────────────────────────
 
-    /**
-     * Whether this enricher supports bulk (batch) API requests.
-     */
     default boolean supportsBulk() {
         return false;
     }
 
-    /**
-     * Enriches a batch of documents in a single API call.
-     *
-     * <p>Returns a list of enriched-fields maps in the <b>same order</b> as the input
-     * lists.  Returning {@code null} at index {@code i} means the enrichment failed for
-     * that document.</p>
-     *
-     * @param documentIds document identifiers (parallel to {@code payloads})
-     * @param payloads    document payload maps (parallel to {@code documentIds})
-     * @return enriched-field maps, one per document, same order
-     */
     default List<Map<String, Object>> enrichBulk(List<String> documentIds,
                                                   List<Map<String, Object>> payloads) throws Exception {
         throw new UnsupportedOperationException("Bulk enrichment not supported by this enricher");
     }
 
-    /**
-     * Async bulk enrichment.  Default delegates to sync {@link #enrichBulk}.
-     */
     default CompletableFuture<List<Map<String, Object>>> enrichBulkAsync(
             List<String> documentIds, List<Map<String, Object>> payloads) {
         return CompletableFuture.supplyAsync(() -> {
@@ -150,8 +107,27 @@ public interface Enricher extends Serializable {
         });
     }
 
-    /**
-     * Releases resources held by this enricher.
-     */
     void close();
+
+    // ── Mapping strategy interfaces ─────────────────────────────────────
+
+    interface QueryMapper extends Serializable {
+        Map<String, Object> mapReflowQuery(Map<String, Object> reflowCriteria);
+    }
+
+    interface ApiRequestMapper extends Serializable {
+        Map<String, Object> mapToRequest(String documentId, Map<String, Object> payload);
+    }
+
+    interface ApiResponseMapper extends Serializable {
+        Map<String, Object> mapFromResponse(String documentId, Map<String, Object> payload, Map<String, Object> apiResponse);
+    }
+
+    interface FieldMapper extends Serializable {
+        /**
+         * Maps a logical field name to the DB-specific field name for the current domain.
+         * E.g. "storeId" → "store_id" (purchases), "storeId" → "client_store_id" (clients)
+         */
+        String mapField(String logicalFieldName);
+    }
 }
