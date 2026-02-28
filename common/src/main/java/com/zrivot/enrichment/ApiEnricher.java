@@ -63,6 +63,20 @@ public class ApiEnricher implements Enricher {
                 config.getName(), apiUrl, config.isBulkEnabled());
     }
 
+    /**
+     * Rebuilds the {@link HttpClient} to use the shared thread-pool executor.
+     * This limits the total number of concurrent HTTP connections across all
+     * enrichers on the same task manager.
+     */
+    @Override
+    public void configureExecutor(java.util.concurrent.ExecutorService executor) {
+        this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofMillis(timeoutMs))
+                .executor(executor)
+                .build();
+        log.info("ApiEnricher '{}' reconfigured with shared executor", apiUrl);
+    }
+
     // ── Single-document enrichment ───────────────────────────────────────
 
     @Override

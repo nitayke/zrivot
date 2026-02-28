@@ -2,9 +2,9 @@ package com.zrivot.pipeline;
 
 import com.zrivot.config.EnricherConfig;
 import com.zrivot.config.PipelineConfig;
+import com.zrivot.enrichment.AsyncBulkEnrichmentFunction;
 import com.zrivot.enrichment.AsyncEnrichmentFunction;
 import com.zrivot.enrichment.BoomerangEnrichmentFunction;
-import com.zrivot.enrichment.BulkEnrichmentFunction;
 import com.zrivot.kafka.KafkaSourceFactory;
 import com.zrivot.model.EnrichmentResult;
 import com.zrivot.model.RawDocument;
@@ -22,12 +22,22 @@ import java.util.concurrent.TimeUnit;
  * <p>Realtime pipeline per enricher:
  * <pre>
  *   [Raw Kafka Topic]
- *       → keyBy(documentId)
- *       → BoomerangEnrichmentFunction  (keyed state guard — only when reflowEnabled)
- *       → AsyncDataStream.orderedWait  (non-blocking API enrichment, preserves order)
- *         OR
- *       → BulkEnrichmentFunction       (buffered batch enrichment for bulk-capable APIs)
+ *       → keyBy(documentId) → BoomerangEnrichmentFunction  (only when reflowEnabled)
+ *       → AsyncDataStream.orderedWait
+ *             single-doc : {@link AsyncEnrichmentFunction}
+ *             bulk       : {@link AsyncBulkEnrichmentFunction}
  * </pre>
+ *
+ * <h3>Key design decisions</h3>
+ * <ul>
+ *   <li><b>orderedWait</b> — emits results in the same order as input, keeping
+ *       downstream semantics deterministic.</li>
+ *   <li><b>No {@code keyBy("bulk")}</b> — the stream is <em>not</em> funnelled
+ *       into a single key; Flink naturally partitions work across task slots.</li>
+ *   <li><b>Rate limiting + concurrency control</b> — handled inside the async
+ *       functions via {@link com.zrivot.enrichment.EnrichmentRateLimiter} and
+ *       {@link com.zrivot.enrichment.SharedEnrichmentExecutor}.</li>
+ * </ul>
  */
 @Slf4j
 public class RealtimePipelineBuilder {
@@ -52,7 +62,6 @@ public class RealtimePipelineBuilder {
         String enricherName = enricherConfig.getName();
         log.info("Building realtime pipeline for enricher '{}'", enricherName);
 
-        // Read raw documents from Kafka with the enricher's own consumer group
         var rawSource = kafkaSourceFactory.createRawSource(
                 config.getRawTopic(),
                 enricherConfig.getConsumerGroup()
@@ -62,9 +71,7 @@ public class RealtimePipelineBuilder {
                 .fromSource(rawSource, WatermarkStrategy.noWatermarks(),
                         "realtime-source-" + enricherName);
 
-        // Determine input stream for enrichment:
-        // - With reflow: apply boomerang guard (keyed state filters stale events)
-        // - Without reflow: no guard needed — pass raw docs straight through
+        // Boomerang guard only needed when reflow is active
         DataStream<RawDocument> enricherInput;
         if (enricherConfig.isReflowEnabled()) {
             enricherInput = rawDocs
@@ -75,23 +82,29 @@ public class RealtimePipelineBuilder {
             enricherInput = rawDocs;
         }
 
-        // Choose enrichment path: bulk or single-document async
+        int maxConcurrent = config.getMaxConcurrentApiRequests();
+
+        // Both bulk and single paths use AsyncDataStream.orderedWait — no keyBy("bulk")
         if (enricherConfig.isBulkEnabled()) {
-            return enricherInput
-                    .keyBy(doc -> "bulk")
-                    .process(new BulkEnrichmentFunction(
+            return AsyncDataStream.orderedWait(
+                    enricherInput,
+                    new AsyncBulkEnrichmentFunction(
                             enricherConfig,
                             config.getElasticsearch(),
-                            config.getElasticsearch().getIndex()))
-                    .name("realtime-bulk-enrich-" + enricherName);
+                            config.getElasticsearch().getIndex(),
+                            maxConcurrent),
+                    enricherConfig.getAsyncTimeoutMs(),
+                    TimeUnit.MILLISECONDS,
+                    enricherConfig.getAsyncCapacity()
+            ).name("realtime-bulk-enrich-" + enricherName);
         } else {
-            // Async enrichment with orderedWait to preserve message ordering
             return AsyncDataStream.orderedWait(
                     enricherInput,
                     new AsyncEnrichmentFunction(
                             enricherConfig,
                             config.getElasticsearch(),
-                            config.getElasticsearch().getIndex()),
+                            config.getElasticsearch().getIndex(),
+                            maxConcurrent),
                     enricherConfig.getAsyncTimeoutMs(),
                     TimeUnit.MILLISECONDS,
                     enricherConfig.getAsyncCapacity()

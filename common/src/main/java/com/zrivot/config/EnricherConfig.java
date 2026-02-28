@@ -49,6 +49,13 @@ public class EnricherConfig implements Serializable {
     /** Maximum number of retries after enrichment failure (reflow only). */
     private int maxRetries = 3;
 
+    /**
+     * Maximum API requests (single or bulk) per second <b>per operator instance</b>.
+     * {@code 0} means unlimited.  Applied before each enrichment call in both the
+     * async single-doc and async bulk operators.
+     */
+    private int rateLimitPerSecond = 0;
+
     public String getProperty(String key) {
         return properties.get(key);
     }

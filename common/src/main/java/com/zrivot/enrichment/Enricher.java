@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
 
 /**
  * Contract for all enrichment implementations.
@@ -36,6 +37,20 @@ public interface Enricher extends Serializable {
      * Called once when the Flink operator opens.
      */
     void init(EnricherConfig config);
+
+    /**
+     * Injects a shared {@link ExecutorService} for async I/O.
+     *
+     * <p>Called once after {@link #init} by the Flink operator.  Implementations
+     * that create their own async primitives (e.g.&nbsp;{@code HttpClient}) should
+     * rebuild them using this executor so that all enrichers on the same task-manager
+     * share a single thread-pool.</p>
+     *
+     * @param executor the JVM-wide shared executor
+     */
+    default void configureExecutor(ExecutorService executor) {
+        // no-op by default
+    }
 
     // ── Mapping hooks ────────────────────────────────────────────────────
 

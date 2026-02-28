@@ -33,7 +33,12 @@ public class PipelineConfig implements Serializable {
     private ReflowConfig reflow = new ReflowConfig();
     private List<EnricherConfig> enrichers;
 
-
+    /**
+     * Maximum number of concurrent API requests across <b>all</b> enrichers that share
+     * the same task manager JVM.  A static semaphore is initialised once on the first
+     * operator {@code open()} call.  Default 50.
+     */
+    private int maxConcurrentApiRequests = 50;
 
     // ── Loading ──────────────────────────────────────────────────────────
 
